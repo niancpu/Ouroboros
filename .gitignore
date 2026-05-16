@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local helper files
+AGENTS.md
+CLAUDE.md
+start claude.bat
+start cx.bat
