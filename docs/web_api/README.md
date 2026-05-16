@@ -4,6 +4,8 @@
 
 定义后端推演系统与前端之间的 API 协议。前端只消费可展示数据和控制面状态，不参与 Agent 决策，不作为任何业务数据的唯一真理源。
 
+前端访问路径固定为 Web API 层：REST 通过 API Gateway，实时事件通过 `FrontendRealtimeGateway`。前端不得直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或任何 Agent runtime。
+
 ## 协议范围
 
 | 文档 | 覆盖范围 |
@@ -29,6 +31,8 @@
 - 修改 Agent 私有记忆。
 - 修改 Layer 3 账本、持仓、冻结股或 LOB。
 - 把 `Frontend_Audit_Graph` 回流给任何 Agent。
+- 读取内部 Redis 或订阅内部频道。
+- 读取 Agent 原始 payload、私有 `thought`、Prompt 或私有记忆。
 
 ## API 风格
 
@@ -36,6 +40,19 @@
 | :--- | :--- | :--- |
 | REST | 控制命令、快照查询 | 请求必须幂等或带 `request_id` |
 | WebSocket | 实时推送 | 后端主动推送，前端只发送订阅、心跳和 ack |
+
+## 可见性映射
+
+内部事件和 Web API 事件使用两套 visibility 枚举。转换只能由 Web API 层或 `FrontendRealtimeGateway` 完成，前端只看到 Web API visibility。
+
+| 内部 visibility | Web API visibility | 说明 |
+| :--- | :--- | :--- |
+| `public` | `public` | 市场公开信息 |
+| `agent_private` | `agent_private_snapshot` | 仅账户快照类数据可转为前端审计视图；Agent 侧仍只能收到本人快照 |
+| `frontend_only` | `frontend_only` | 前端专用审计视图，禁止进入 Agent |
+| `control_only` | `control_only_view` | 运行状态或错误摘要，不暴露内部原始 payload |
+
+`Order_Input`、`UI_Audit`、Agent 原始 payload、`trade_batch`、`risk_result` 等内部原始事件不得直接转换为 Web API 事件。
 
 ## 通用字段
 
@@ -57,6 +74,7 @@
 - `tick_id` 是模拟时间，只能由 Meta-Orchestrator 推进。
 - `server_time` 是真实服务器时间。
 - `trace_id` 用于排错，不作为 Agent 输入。
+- Web API 响应和推送不得包含原始 `thought`、Prompt、私有记忆、Agent 原始 payload 或内部频道原始消息。
 
 ## 数据来源映射
 

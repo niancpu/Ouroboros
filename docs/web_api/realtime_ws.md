@@ -4,6 +4,8 @@
 
 定义后端向前端推送实时事件的 WebSocket 协议。WebSocket 只用于展示和控制面状态同步，不允许前端通过该连接写入市场业务数据。
 
+WebSocket 连接由 `FrontendRealtimeGateway` 提供。前端不得直连内部 Redis、内部 Pub/Sub channel、`UI_Audit`、`Order_Input` 或任何 Agent runtime。
+
 ## 连接
 
 ```text
@@ -62,6 +64,8 @@ GET /api/v1/sessions/{session_id}/ws
 - 通过 WebSocket 修改 Agent 状态。
 - 通过 WebSocket 发布论坛消息。
 - 通过 WebSocket 写入审计图。
+- 通过 WebSocket 订阅内部 Redis channel。
+- 通过 WebSocket 请求 `UI_Audit`、Agent 原始 payload、私有 `thought`、Prompt 或私有记忆。
 
 ## 服务端事件信封
 
@@ -86,7 +90,8 @@ GET /api/v1/sessions/{session_id}/ws
 - `seq` 在单个 `session_id` 内严格递增。
 - `type` 使用 `domain.event` 命名。
 - `visibility` 取值：`public`、`frontend_only`、`agent_private_snapshot`、`control_only_view`。
-- `payload` 不得包含内部 Redis 原始消息以外的私有字段。
+- `visibility` 是 Web API visibility，不是内部 visibility。内部枚举到 Web API 枚举的映射见 [visibility_and_errors.md](visibility_and_errors.md)。
+- `payload` 只能包含前端协议字段，不得包含内部 Redis 原始消息、内部 channel payload、Agent 原始 payload 或任何私有字段。
 
 ## 事件类型
 
@@ -290,6 +295,7 @@ GET /api/v1/sessions/{session_id}/ws
 - 前端可以用于展示和审计。
 - Agent 仍只能收到自己的 `Account_Snapshot`。
 - 前端显示全量账户快照不改变 Agent 信息权限。
+- `agent_private_snapshot` 只用于 Web API 审计视图，不等同于内部 `agent_private` 频道开放给前端直连。
 
 ## `audit.graph`
 
@@ -322,7 +328,7 @@ GET /api/v1/sessions/{session_id}/ws
 
 约束：
 
-- 默认不包含原始 `thought`。
+- 不包含原始 `thought`、`thought` 摘要、Prompt、私有记忆或 Agent 原始 payload。
 - `public_reason` 必须是脱敏解释。
 - `visibility=frontend_only` 的事件不得进入 Agent runtime。
 
@@ -405,7 +411,7 @@ GET /api/v1/sessions/{session_id}/ws
 约束：
 
 - 只展示脱敏因果解释。
-- `public_text` 不得包含原始 `thought`。
+- `public_text` 不得包含原始 `thought`、`thought` 摘要、Prompt、私有记忆或 Agent 原始 payload。
 - `event_ref` 只能引用可展示事件或前端专用审计事件。
 - `confidence` 表示审计官对链路强弱的估计，不是市场事实。
 - `visibility=frontend_only`，不得回流 Agent。
@@ -435,3 +441,4 @@ GET /api/v1/sessions/{session_id}/ws
 - 前端重连时携带 `from_seq`。
 - 如果 `from_seq` 已过期，服务端返回 `SNAPSHOT_REQUIRED`，前端必须先调用 REST 快照接口再重新订阅。
 - 前端必须定期发送 `ack`，服务端可根据 `last_seq` 清理缓冲。
+- 断线恢复只使用 REST `snapshot` 和 `FrontendRealtimeGateway` 回放缓冲，不要求也不允许前端读取内部 Redis。

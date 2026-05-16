@@ -4,6 +4,8 @@
 
 定义前端调用控制面的 REST 接口。REST 只用于会话管理、运行控制和快照查询，不允许前端直接修改市场业务状态。
 
+REST 访问路径固定为 Web API 层/API Gateway。前端不得通过 REST 直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或 Agent runtime。
+
 ## 基础路径
 
 ```text
@@ -269,7 +271,7 @@ GET /api/v1/sessions/{session_id}/snapshot
 - 快照用于前端恢复视图，不用于 Agent 输入。
 - 快照中的 `audit_graph` 必须是脱敏结果。
 - 快照中的 `causal_chains` 只保存可恢复摘要和最近状态，不保存原始 `thought`。
-- 快照不得包含原始 `thought`。
+- 快照不得包含原始 `thought`、`thought` 摘要、Prompt、私有记忆、Agent 原始 payload、`UI_Audit` 或内部 channel payload。
 
 ## 获取事件回放
 
@@ -300,6 +302,7 @@ GET /api/v1/sessions/{session_id}/events?from_seq=1000&limit=500
 
 - 只返回前端允许消费的事件。
 - 不返回 `Order_Input`、`UI_Audit`、Agent 原始 payload。
+- 不返回内部 Redis 原始消息、内部 channel payload、私有 `thought`、Prompt 或私有记忆。
 - `limit` 必须有服务端上限。
 
 ## 停止会话
@@ -342,3 +345,5 @@ POST /api/v1/sessions/{session_id}/stop
 - 人工注入 Agent `thought` 接口。
 - 人工写入 `Forum_Rumors` 接口。
 - 直接推进 Layer 0 或 Layer 3 的接口。
+- 读取内部 Redis 或内部 channel 的接口。
+- 读取 `UI_Audit`、Agent 原始 payload、Prompt 或私有记忆的接口。

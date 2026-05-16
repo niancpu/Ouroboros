@@ -4,7 +4,11 @@
 
 定义前端 API 的可见性边界、错误码和恢复规则。核心要求：前端可以看审计视图，但审计视图不得成为 Agent 输入。
 
+前端访问路径固定为 Web API 层。REST 通过 API Gateway，实时事件通过 `FrontendRealtimeGateway`；前端不得直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或 Agent runtime。
+
 ## 可见性等级
+
+Web API visibility 与内部 visibility 分开命名。前端只接收下表中的 Web API visibility：
 
 | 值 | 说明 | 可进入前端 | 可进入 Agent |
 | :--- | :--- | :--- | :--- |
@@ -13,6 +17,17 @@
 | `frontend_only` | 前端审计图和脱敏解释 | 是 | 否 |
 | `control_only_view` | 控制面运行状态 | 是 | 否 |
 
+内部 visibility 到 Web API visibility 的唯一映射：
+
+| 内部 visibility | Web API visibility | 转换限制 |
+| :--- | :--- | :--- |
+| `public` | `public` | 仅可转换已按公开规则过滤的市场、论坛和披露事件 |
+| `agent_private` | `agent_private_snapshot` | 仅 `Account_Snapshot` 等账户快照审计视图可转换；不得开放内部 `agent_private` channel |
+| `frontend_only` | `frontend_only` | 仅 `Frontend_Audit_Graph`、`Frontend_Causal_Chain` 等前端专用脱敏事件 |
+| `control_only` | `control_only_view` | 仅运行状态和错误摘要；不得暴露内部原始 payload |
+
+转换只能由 Web API 层或 `FrontendRealtimeGateway` 完成。前端事件回放只能回放 Web API 事件，不得要求前端读取内部 Redis。
+
 禁止通过 Web API 暴露：
 
 - `Order_Input` 原始内部消息。
@@ -20,6 +35,7 @@
 - Agent 原始 payload。
 - Agent 私有记忆。
 - 未脱敏原始 `thought`。
+- `thought` 摘要、Prompt、未公开订单理由或内部 payload。
 - Layer 3 底层 LOB 队列。
 - Layer 0 未来事实。
 
@@ -41,13 +57,16 @@
 
 - 核心机构 Agent 原始 COT。
 - 未脱敏 `thought`。
+- `thought` 摘要。
 - 订单背后的私有理由。
+- Prompt、Agent 私有记忆和 Agent 原始 payload。
 
 诊断通道说明：
 
 - 普通 Web API 不提供原始 `thought` 调试例外。
 - 如果后续需要沙盒外诊断通道，必须另起独立接口和独立权限，不得复用普通 `snapshot`、`events` 或 WebSocket 事件流。
 - 诊断通道输出仍不得写入任何 Agent 可订阅频道。
+- 诊断通道不得改变 Web API visibility 的含义。
 
 ## 错误响应格式
 
@@ -141,3 +160,5 @@ WebSocket 错误：
 - REST 不提供下单、改账、改仓、注入 thought 的接口。
 - 断线恢复不能要求前端访问内部 Redis。
 - 错误响应不得泄露私有 `thought`、Prompt 或 Agent 私有记忆。
+- `agent_private_snapshot` 只能来自允许转换的账户快照审计视图，不得作为通用私有数据透传通道。
+- `control_only_view` 只能展示状态和错误摘要，不得携带内部 `control_only` 原始 payload。
