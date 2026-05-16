@@ -117,7 +117,7 @@ RAG 返回不得包含：
 
 ## 初始市场种子
 
-Layer 0 可以在推演启动时提供初始市场种子给 Layer 3：
+Layer 0 可以在推演启动时提供初始市场种子给 Layer 3。该流程只能在会话初始化阶段发生，由 Meta-Orchestrator 调用 Chronos 后转交 Layer 3，不经过 Agent 可订阅频道。
 
 ```json
 {
@@ -136,9 +136,23 @@ Layer 0 可以在推演启动时提供初始市场种子给 Layer 3：
 
 约束：
 
+- `initial_market_seed` 只能由 Meta-Orchestrator 在 `create_session` 阶段请求。
+- Chronos 不得直接向 Agent 发布初始种子。
+- Layer 3 接收种子后生成第一份合规 `Market_Price` 快照，Agent 仍只能看到该快照。
 - 初始 L2 种子只用于初始化 Layer 3 市场状态。
 - Agent 仍只能通过 `Market_Price` 看到合规市场快照。
 - 初始种子不得包含未来 Tick 的盘口变化。
+
+返回：
+
+```json
+{
+  "schema_version": "v1",
+  "seed_id": "seed_001",
+  "status": "accepted",
+  "target": "layer3_market_init"
+}
+```
 
 ## 取舍与后果
 

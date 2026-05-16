@@ -132,7 +132,6 @@ POST /api/v1/sessions/{session_id}/start
 `mode` 取值：
 
 - `continuous`：持续推进到暂停、失败或结束。
-- `single_tick`：只推进一个 Tick。
 
 响应：
 
@@ -145,6 +144,11 @@ POST /api/v1/sessions/{session_id}/start
   }
 }
 ```
+
+约束：
+
+- `start` 只负责把 `created` 或 `paused` 会话切到连续运行。
+- 单步推进统一使用 `/step`，避免与 `start` 语义重叠。
 
 ## 暂停会话
 
@@ -247,7 +251,15 @@ GET /api/v1/sessions/{session_id}/snapshot
     "audit_graph": {
       "nodes": [],
       "edges": []
-    }
+    },
+    "causal_chains": [
+      {
+        "chain_id": "chain_001",
+        "title": "游资帖子触发散户追涨",
+        "summary": "公开股吧帖子推动散户信念上升，随后买单增加并抬高价格。",
+        "last_event_ref": "mkt_002"
+      }
+    ]
   }
 }
 ```
@@ -256,7 +268,8 @@ GET /api/v1/sessions/{session_id}/snapshot
 
 - 快照用于前端恢复视图，不用于 Agent 输入。
 - 快照中的 `audit_graph` 必须是脱敏结果。
-- 快照不得包含原始 `thought`，除非后端显式开启沙盒外调试模式。
+- 快照中的 `causal_chains` 只保存可恢复摘要和最近状态，不保存原始 `thought`。
+- 快照不得包含原始 `thought`。
 
 ## 获取事件回放
 

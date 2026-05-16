@@ -183,12 +183,12 @@
 - `confidence` 是审计官对链路强弱的估计，不是市场事实。
 - `Frontend_Causal_Chain` 不得写入任何 Agent 可订阅频道。
 
-前端默认不得展示原始 `thought`。如需调试视图展示原始 `thought`，必须满足：
+普通前端和普通 Web API 不得展示原始 `thought`。如需沙盒外诊断能力，必须另行定义独立诊断通道，不复用 `Frontend_Audit_Graph`、`Frontend_Causal_Chain`、REST `snapshot` 或 WebSocket 普通事件流。
 
-- 只在沙盒外的开发或评审模式开启。
-- WebSocket 消息仍标记为 `frontend_only`。
+- 诊断通道必须有独立权限和独立审计日志。
+- 诊断输出不得进入普通前端事件回放。
 - 不写入任何 Agent 可订阅频道。
-- 页面明确区分“审计视图”和“市场可见信息”。
+- 页面必须明确区分“沙盒外诊断视图”和“市场可见信息”。
 
 ## 发布阈值
 

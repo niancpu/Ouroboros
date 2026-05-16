@@ -18,6 +18,7 @@
 | `Forum_Rumors` | Meta-Orchestrator | 散户、可配置 Agent、前端 | 是 | 允许发帖 Agent 的公开小作文，经控制面校验后发布 |
 | `Frontend_Audit_Graph` | UI 渲染审查官 | 前端 | 否 | 拓扑连线、脱敏解释、审计可视化 |
 | `Frontend_Causal_Chain` | UI 渲染审查官 | 前端 | 否 | 脱敏因果链时间线 |
+| `Forum_Rumors_Internal` | Meta-Orchestrator | 内部校验层 | 否 | 公开帖子校验、去重、映射到前端 `forum.post` |
 
 ## 控制面约束
 
@@ -43,6 +44,32 @@ Agent N ===(payload)===> Meta-Orchestrator ===(thought)==> [Channel: UI_Audit]  
 - `UI_Audit` 可以承载私有审计材料，但任何 Agent 都不得订阅。
 - `Frontend_Audit_Graph` 和 `Frontend_Causal_Chain` 只能被前端订阅，不得被 Agent runtime、撮合引擎、策略调度器订阅。
 
+## `Forum_Rumors` 最小消息字段
+
+```json
+{
+  "schema_version": "v1",
+  "event_id": "forum_001",
+  "tick_id": "2024-01-02T14:02:00+08:00",
+  "trace_id": "trace_abc",
+  "producer": "meta_orchestrator",
+  "visibility": "public",
+  "post_id": "forum_post_123",
+  "author_agent_id": "hot_money_a",
+  "author_type": "hot_money",
+  "text": "公开股吧内容",
+  "stance": "bullish",
+  "created_tick_id": "2024-01-02T14:02:00+08:00",
+  "source": "agent_public_post"
+}
+```
+
+约束：
+
+- `text` 必须是公开文本，不能包含 `thought` 原文。
+- `Forum_Rumors` 只承载公开帖子，不承载私有审计内容。
+- `Forum_Rumors_Internal` 只用于内部校验，不得被 Agent 订阅。
+
 ## Agent 合法输入路由
 
 ```text
@@ -60,6 +87,20 @@ Meta-Orchestrator ===> [Channel: Forum_Rumors]  ==> 散户/可配置 Agent
 - UI 审计通道和前端审计图不得作为 Agent 上下文。
 - `Account_Snapshot` 在 Agent 侧只能进入对应 Agent 的本地只读副本；前端只能通过 Web API 审计视图消费，不得作为全市场广播或 Agent 输入。
 - 盘中广播只能描述匿名订单流和市场物理状态；身份级、动机级信息只能在盘后延迟披露中以席位统计形式出现。
+
+## 初始化非广播路径
+
+```text
+Meta-Orchestrator -> Chronos.build_initial_market_seed(config)
+Meta-Orchestrator -> Layer 3 initialize_market(seed)
+MarketDataPublisher -> Market_Price: publish first compliant market snapshot
+```
+
+约束：
+
+- `initial_market_seed` 不经过 Redis 公共频道。
+- Agent 不得直接读取初始种子。
+- 初始化完成后，Agent 只能通过 `Market_Price` 看到合规市场快照。
 
 ## 最小消息字段
 
@@ -187,3 +228,10 @@ Meta-Orchestrator ===> [Channel: Forum_Rumors]  ==> 散户/可配置 Agent
 - UI 渲染审查官的输出不写入 Agent 可订阅频道。
 - `Account_Snapshot` 只能由 Layer 3 发布；Agent 侧只能被对应 Agent 消费，前端侧只能作为审计视图消费。
 - 集成测试必须覆盖：向 `UI_Audit` 写入私有 thought 后，任意 Agent 合法输入中都不能出现该内容。
+
+## Redis 实现级约束
+
+- 频道名可以和逻辑频道一致，但必须按 `session_id` 或命名空间隔离。
+- 实时事件缓冲必须有 TTL，避免旧会话污染新会话。
+- `ack` 和 `replay` 只影响前端 WebSocket 缓冲，不改变业务 SSOT。
+- Redis 允许缓存只读快照，但不允许把资金、持仓、LOB、私有记忆当作唯一真理源。

@@ -44,6 +44,36 @@
 - `client_order_id`: Agent 侧幂等 id，不能作为成交事实。
 - `producer` 必须是 `meta_orchestrator` 或系统强平流程，Agent 不得绕过控制面直写 Layer 3。
 
+### `forced_liquidation` 订单
+
+Meta-Orchestrator 触发强平时，仍然通过 `Order_Input` 进入 Layer 3，但必须显式标记来源和原因。
+
+```json
+{
+  "schema_version": "v1",
+  "event_id": "order_fl_001",
+  "tick_id": "2024-01-02T14:02:00+08:00",
+  "trace_id": "trace_abc",
+  "producer": "meta_orchestrator",
+  "visibility": "control_only",
+  "agent_id": "retail_b",
+  "symbol": "demo_stock",
+  "side": "sell",
+  "order_type": "market",
+  "quantity": 300000,
+  "time_in_force": "ioc",
+  "order_kind": "forced_liquidation",
+  "reason_code": "equity_drawdown_limit",
+  "source_risk_state": "margin_call"
+}
+```
+
+约束：
+
+- `order_kind=forced_liquidation` 只能由 Meta-Orchestrator 生成。
+- 强平单必须优先于同 Tick 的普通动作处理。
+- 强平单不得携带 `thought`、`belief_shift` 或私有解释字段。
+
 禁止字段：
 
 - `thought`
@@ -119,6 +149,45 @@ schema validation
 ```
 
 成交事件进入 Layer 3 内部清算和脱敏市场数据链路。公共 `Market_Price` 不得暴露真实 `buy_order_id`、`sell_order_id` 或 Agent 身份。
+
+## MatchingEngine 与 ClearingHouse 之间的批次接口
+
+### `trade_batch`
+
+```json
+{
+  "schema_version": "v1",
+  "batch_id": "batch_001",
+  "tick_id": "2024-01-02T14:02:00+08:00",
+  "trace_id": "trace_abc",
+  "trades": [
+    {
+      "event_id": "trade_001",
+      "symbol": "demo_stock",
+      "price": 15.2,
+      "quantity": 1000,
+      "buy_order_id": "order_b_001",
+      "sell_order_id": "order_s_001"
+    }
+  ]
+}
+```
+
+### `risk_result`
+
+```json
+{
+  "schema_version": "v1",
+  "batch_id": "batch_001",
+  "tick_id": "2024-01-02T14:02:00+08:00",
+  "trace_id": "trace_abc",
+  "agent_id": "retail_b",
+  "risk_state": "margin_call",
+  "equity": 480000.0,
+  "drawdown_pct": 52.0,
+  "reason_code": "equity_drawdown_limit"
+}
+```
 
 ## 清算规则
 
@@ -228,3 +297,4 @@ COMMIT_TICK
 - 涨跌停测试覆盖：越界报价被拒绝。
 - 清算后只有 `ClearingHouse` 能发布 `Account_Snapshot`。
 - `Market_Price` 不包含 Agent 身份、订单 id 或订单理由。
+- `trade_batch` 和 `risk_result` 只能在 Layer 3 内部传递，不得进入 Agent 可订阅频道。

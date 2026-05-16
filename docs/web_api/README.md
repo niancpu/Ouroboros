@@ -65,6 +65,7 @@
 | `market.price` | Layer 3 `Market_Price` | `order_and_clearing_contract.md` |
 | `market.tape_alert` | ExchangeBroadcaster `Tape_Alerts` | `referee_publication_contract.md` |
 | `market.end_of_day` | ExchangeBroadcaster `End_of_Day` | `referee_publication_contract.md` |
+| `forum.post` | Meta-Orchestrator `Forum_Rumors` | `agent_payload_contract.md`、`channel_routing.md` |
 | `agent.account_snapshot` | Layer 3 `Account_Snapshot` | `order_and_clearing_contract.md` |
 | `audit.graph` | UIAuditOfficer `Frontend_Audit_Graph` | `referee_publication_contract.md` |
 | `audit.causal_chain` | UIAuditOfficer `Frontend_Causal_Chain` | `referee_publication_contract.md` |

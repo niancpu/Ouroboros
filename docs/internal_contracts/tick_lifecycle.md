@@ -36,10 +36,10 @@ Meta-Orchestrator 调用 Layer 0。Layer 0 只发布当前 Tick 允许可见的�
 
 ### `PUBLISH_MARKET_VIEW`
 
-Meta-Orchestrator 调用 Layer 3 生成当前可见市场快照，并调用交易所数据播报员生成必要的匿名盘口异动。发布责任固定为：
+Meta-Orchestrator 调用 Layer 3 的 `MarketDataPublisher` 生成当前可见市场快照，并调用交易所数据播报员生成必要的匿名盘口异动。发布责任固定为：
 
 - `Market_Price`
-- Layer 3 发布合规 Level-2 快照到 `Market_Price`。
+- `MarketDataPublisher` 发布合规 Level-2 快照到 `Market_Price`。
 - 交易所数据播报员读取 Layer 3 匿名市场输出，发布必要的 `Tape_Alerts`。
 
 约束：
@@ -137,8 +137,8 @@ Meta-Orchestrator 确认当前 Tick 的账本、事件日志、生命周期状�
 ```text
 1. Meta-Orchestrator -> Layer 0: release(tick_id)
 2. Layer 0 -> Official_News: publish current facts
-3. Meta-Orchestrator -> Layer 3: publish_market_view(tick_id)
-4. Layer 3 -> Market_Price: publish Level-2 snapshot
+3. Meta-Orchestrator -> MarketDataPublisher: publish_market_view(tick_id)
+4. MarketDataPublisher -> Market_Price: publish Level-2 snapshot
 5. Meta-Orchestrator -> Agent[*]: act(tick_id)
 6. Agent[*] -> Meta-Orchestrator: payload(action, thought, belief_shift)
 7. Meta-Orchestrator -> Order_Input: route action

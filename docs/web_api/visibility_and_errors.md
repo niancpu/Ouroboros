@@ -35,6 +35,7 @@
 - `Frontend_Audit_Graph` 的脱敏拓扑边。
 - `audit.causal_chain` 的脱敏因果链。
 - Meta-Orchestrator 的 Tick 状态和 Agent 生命周期状态。
+- 快照中的 `causal_chains` 恢复摘要。
 
 默认不展示：
 
@@ -42,12 +43,11 @@
 - 未脱敏 `thought`。
 - 订单背后的私有理由。
 
-调试模式例外：
+诊断通道说明：
 
-- 调试模式可以让前端看到原始 `thought`。
-- 调试模式必须标记为沙盒外视图。
-- 调试模式输出仍不得写入任何 Agent 可订阅频道。
-- 调试模式必须在服务端配置显式开启，不能由前端单方开启。
+- 普通 Web API 不提供原始 `thought` 调试例外。
+- 如果后续需要沙盒外诊断通道，必须另起独立接口和独立权限，不得复用普通 `snapshot`、`events` 或 WebSocket 事件流。
+- 诊断通道输出仍不得写入任何 Agent 可订阅频道。
 
 ## 错误响应格式
 

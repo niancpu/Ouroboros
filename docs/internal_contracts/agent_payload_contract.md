@@ -24,7 +24,11 @@
   },
   "private_inputs": {
     "account_snapshot": {},
-    "memory_refs": []
+    "memory_refs": [],
+    "memory_window": {
+      "lookback_ticks": 20,
+      "retrieved_memory_ids": ["mem_001"]
+    }
   },
   "constraints": {
     "allowed_actions": ["buy", "sell", "cancel", "hold", "post_forum"],
@@ -43,6 +47,28 @@
 - `End_of_Day`
 - `Forum_Rumors`，按 Agent 权限过滤
 - 本 Agent 的 `Private Memory`
+
+## 私有记忆检索约束
+
+Agent 的私有记忆检索必须由 Meta-Orchestrator 或 AgentRuntime 本地接口完成，不能直接从公共频道拼装。
+
+允许返回的记忆项：
+
+```json
+{
+  "memory_id": "mem_001",
+  "memory_type": "past_trade",
+  "summary": "曾在高波动行情追涨后回撤。",
+  "source_refs": ["forum_post_123", "acct_001"],
+  "created_tick_id": "2023-12-20T10:30:00+08:00"
+}
+```
+
+约束：
+
+- `summary` 必须是本 Agent 自己可见的摘要。
+- `source_refs` 只能引用公开事件或本 Agent 自身历史。
+- 检索结果不能包含其他 Agent 的私有内容。
 
 禁止输入：
 
@@ -78,7 +104,11 @@ Agent 必须返回结构化 JSON。无论 LLM 原始输出是什么，进入控�
     "risk_appetite_delta": 0.1
   },
   "evidence_refs": ["forum_post_123"],
-  "forum_post": null
+  "forum_post": null,
+  "memory_update": {
+    "should_write": true,
+    "summary": "受到盘口异动和股吧帖子影响，看多信念上升。"
+  }
 }
 ```
 
@@ -91,6 +121,7 @@ Agent 必须返回结构化 JSON。无论 LLM 原始输出是什么，进入控�
 | `belief_shift` | `UI_Audit` | 否 | 用于前端拓扑和情绪可视化 |
 | `evidence_refs` | `UI_Audit` | 否 | 只能引用已公开事件或本 Agent 记忆 id |
 | `forum_post` | `Forum_Rumors` | 是 | 仅允许有发帖权限的 Agent 发布 |
+| `memory_update` | `Agent Private Memory` | 否 | 仅写入本 Agent 私有记忆 |
 | `trace_id` | 控制面日志 | 否 | 不进入 Agent 下一轮上下文 |
 
 ## `action` 约束
@@ -130,6 +161,7 @@ Agent 必须返回结构化 JSON。无论 LLM 原始输出是什么，进入控�
 - 只有 `can_post_forum=true` 的 Agent 可以发布。
 - `forum_post.text` 可以是公开观点，但不得携带该 Agent 的私有 `thought` 字段原文。
 - `forum_post` 是市场公开内容，其他 Agent 可以在下一 Tick 看见。
+- `memory_update` 只能进入本 Agent 私有记忆，不能回流给其他 Agent。
 
 ## 校验失败处理
 
@@ -153,3 +185,4 @@ Agent 必须返回结构化 JSON。无论 LLM 原始输出是什么，进入控�
 - `action` 序列化进入 `Order_Input` 时不得包含 `thought`、`belief_shift`、`evidence_refs`。
 - `UI_Audit` 写入后，任意 Agent 下一轮 `tick_context` 都不得出现该内容。
 - 未授权发帖的 Agent 输出 `forum_post` 时必须被拒绝。
+- `memory_update` 不得写入公共频道。

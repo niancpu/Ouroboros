@@ -34,6 +34,7 @@
 依赖：
 
 - 详细设计见 [meta_orchestrator.md](meta_orchestrator.md)
+- 控制面接口见 [../internal_contracts/control_plane_contract.md](../internal_contracts/control_plane_contract.md)
 - Tick 生命周期契约见 [../internal_contracts/tick_lifecycle.md](../internal_contracts/tick_lifecycle.md)
 
 ### 2. Layer 0: Chronos 历史时间轴与事实底座
@@ -42,6 +43,7 @@
 
 - 提供真实外部刺激。
 - 按 Tick 释放历史事实。
+- 在会话初始化阶段提供初始市场种子。
 - 维护 `Chronos Data` 的唯一真理源。
 
 组件：
@@ -54,18 +56,21 @@
 
 - Agent 不得一次性读取全量历史。
 - Layer 0 不得自行推进系统 Tick。
+- `initial_market_seed` 只能由 Meta-Orchestrator 请求，并只交给 Layer 3 初始化市场状态，不进入 Agent 可订阅频道。
 
 ### 3. Layer 1: 异构智能体矩阵
 
 职责：
 
 - 维护 24+ 个 Agent 的内部状态机与私有 Prompt。
+- 管理 Agent Profile、Prompt Profile、私有记忆命名空间。
 - 生成 `thought` 与 `action`。
 
 状态边界：
 
 - `thought` 只能进入 UI 审计链路。
 - `action` 是唯一允许影响市场的输出。
+- `memory_update` 只能写入本 Agent 私有记忆。
 - 资金、持仓、可卖数量只允许保存 Layer 3 推送的只读副本。
 
 Agent 编队：
@@ -76,17 +81,23 @@ Agent 编队：
 - 散户群体 x16：高 FOMO，高损失厌恶。
 - 国家队 x2：极端行情下提供流动性。
 
+设定与 Prompt 契约见 [../internal_contracts/agent_profile_prompt_contract.md](../internal_contracts/agent_profile_prompt_contract.md)。权限矩阵见 [../internal_contracts/agent_identity_permissions.md](../internal_contracts/agent_identity_permissions.md)。
+
 ### 4. Layer 2: 异步信息流沙盒
 
 职责：
 
 - 按权限转发事件。
 - 承载黑板式公开信息流。
+- 为前端和 Agent 提供短期实时事件缓冲。
 
 约束：
 
 - 不拥有资金、持仓、订单簿、历史事实或 Agent 私有记忆。
 - 不作为业务 SSOT。
+- Redis key/channel 必须按会话隔离，缓存必须有 TTL。
+- WebSocket `ack/replay` 只用于前端断线恢复和事件缓冲清理，不得改变账本、订单、私有记忆或 Tick 状态。
+- `Forum_Rumors_Internal` 只做公开帖子校验和去重，不允许 Agent 订阅。
 
 信息池：
 
@@ -106,6 +117,7 @@ Referee 边界：
 
 - 维护 `Ledger`、`Positions`、`frozen_shares`、`LOB`。
 - 校验订单、撮合、清算、冻结与快照发布。
+- 生成 `trade_batch`、`risk_result` 和合规 `Market_Price`。
 
 规则：
 
@@ -113,6 +125,14 @@ Referee 边界：
 - `±10%` 涨跌停板硬约束。
 - T+1 冻结必须由 Layer 3 统一执行。
 - Agent 只能提交订单，不能直接读取底层 LOB。
+- `forced_liquidation` 由 Meta-Orchestrator 触发，但仍由 Layer 3 校验和清算。
+- `trade_batch`、`risk_result` 是 Layer 3 内部接口，不进入 Agent 可订阅频道。
+
+子模块：
+
+- `MatchingEngine`：维护 LOB，执行订单校验、撮合和成交生成。
+- `ClearingHouse`：维护资金、持仓、冻结股和风险状态。
+- `MarketDataPublisher`：接收撮合和订单簿脱敏视图，发布成交、价格和 Level-2 快照；MatchingEngine 不直接发布公共市场快照。
 
 ### 6. Layer 4: 流式可视化与研报输出
 
@@ -120,11 +140,26 @@ Referee 边界：
 
 - 向前端展示市场状态与审计结果。
 - 渲染拓扑图、持仓变化、公开信念变化。
+- 渲染前端因果链，并在断线恢复快照中保留 `causal_chains` 摘要。
 
 约束：
 
 - 不展示核心机构 Agent 的私有 COT。
 - 只消费脱敏后的公共事件和前端专用审计数据。
+- 前端因果链只用于解释展示，不得回流 Agent。
+
+### 基础设施: LLMGateway
+
+职责：
+
+- 统一模型调用、限流和结构化输出校验。
+- 执行 Agent Prompt 调用，但不拥有任何金融业务事实。
+
+约束：
+
+- 不得跨 Agent 拼接上下文。
+- 不得缓存资金、持仓、订单簿、私有记忆或历史事实作为 SSOT。
+- 只做模型输出格式预检；最终安全校验、权限判断和字段路由必须由 Meta-Orchestrator 完成。
 
 ## 数据归属
 
@@ -153,6 +188,9 @@ Referee 边界：
 
 ## 依赖契约
 
+- [../internal_contracts/README.md](../internal_contracts/README.md)
+- [../internal_contracts/control_plane_contract.md](../internal_contracts/control_plane_contract.md)
+- [../internal_contracts/agent_profile_prompt_contract.md](../internal_contracts/agent_profile_prompt_contract.md)
 - [meta_orchestrator.md](meta_orchestrator.md)
 - [referee_design.md](referee_design.md)
 - [../internal_contracts/module_interface_registry.md](../internal_contracts/module_interface_registry.md)

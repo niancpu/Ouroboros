@@ -28,8 +28,19 @@ Meta-Orchestrator 是 Ouroboros 的控制面。它负责全局 Agent 管理、�
 推演开始时：
 
 - 读取配置。
+- 请求 Chronos 生成 `initial_market_seed`。
 - 实例化 Agent 进程或协程。
-- 调用 Layer 3 初始化资金池和初始持仓。
+- 调用 Layer 3 初始化资金池、初始持仓和初始市场状态。
+
+初始化流程：
+
+```text
+Meta-Orchestrator 读取 session_config
+  -> Chronos.build_initial_market_seed(config)
+  -> Layer 3 initialize_market(seed)
+  -> Layer 3 发布第一份合规 Market_Price
+  -> Agent 只能通过 Market_Price 看到初始市场
+```
 
 每个 Tick 结束后：
 
@@ -43,6 +54,7 @@ Layer 3 产出风险状态
   -> Meta-Orchestrator 判断触发强平线
   -> Meta-Orchestrator 停止该 Agent 主动 act 权限
   -> Meta-Orchestrator 向 Layer 3 提交 forced_liquidation action
+  -> Layer 3 校验并执行清算
   -> UI 标记该 Agent 为已爆仓/已终止
 ```
 
@@ -83,12 +95,15 @@ Meta-Orchestrator 统一接收 Agent payload，并只做字段级路由，不做
 
 - `action` -> Layer 3 `Order_Input`。
 - `thought`、`belief_shift`、`evidence_refs` -> `UI_Audit`。
+- `forum_post` -> 权限校验后进入 `Forum_Rumors`。
+- `memory_update` -> 仅写入该 Agent 私有记忆。
 - `agent_id`、`tick_id`、`trace_id` -> 控制面日志。
 
 绝对禁止：
 
 - 把任意 Agent payload 原样写入公共 Redis 总线。
 - 把 `thought`、私有记忆、未公开意图放进 `Official_News`、`Market_Price`、`Tape_Alerts`、`Forum_Rumors`。
+- 把 `memory_update` 写入公共频道或其他 Agent 记忆。
 - 用 Meta-Orchestrator 代替 Agent 或 Layer 3 做金融判断。
 
 ## 驱动外部环境
@@ -97,6 +112,7 @@ Meta-Orchestrator 决定何时调用：
 
 - Layer 0：释放当前 Tick 的官方事实与历史事件。
 - Layer 3：发布 Level-2 快照、执行撮合与清算、产出风险状态。
+- LLMGateway：只做模型调用、限流和结构化输出格式预检，不拥有业务事实；最终安全校验由 Meta-Orchestrator 执行。
 - Referee 数据播报员：生成盘口异动、盘后龙虎榜。
 - UI 审计官：生成前端拓扑边与脱敏说明。
 
