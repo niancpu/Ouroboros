@@ -9,7 +9,7 @@
 | 实体 | 输入 | 输出 | 可被 Agent 订阅 | 禁止事项 |
 | :--- | :--- | :--- | :--- | :--- |
 | `ExchangeBroadcaster` | Layer 3 匿名订单流、成交、Level-2 快照、盘后席位统计 | `Tape_Alerts`、`End_of_Day` | 是 | 读取私有 `thought`、广播身份绑定意图 |
-| `UIAuditOfficer` | `UI_Audit`、公开事件引用、成交结果 | `Frontend_Audit_Graph` | 否 | 写入 Agent 可订阅频道 |
+| `UIAuditOfficer` | `UI_Audit`、公开事件引用、成交结果 | `Frontend_Audit_Graph`、`Frontend_Causal_Chain` | 否 | 写入 Agent 可订阅频道 |
 
 ## `Tape_Alerts` schema
 
@@ -123,6 +123,66 @@
 }
 ```
 
+## `Frontend_Causal_Chain` schema
+
+该事件用于前端展示脱敏因果链，例如：
+
+```text
+公开帖子 -> 散户信念上升 -> 买单增加 -> 价格上涨 -> 更多散户追涨
+```
+
+```json
+{
+  "schema_version": "v1",
+  "event_id": "chain_001",
+  "tick_id": "2024-01-02T14:03:00+08:00",
+  "trace_id": "trace_abc",
+  "producer": "ui_audit_officer",
+  "visibility": "frontend_only",
+  "chain_id": "chain_001",
+  "title": "游资帖子触发散户追涨",
+  "summary": "公开股吧帖子推动散户信念上升，随后买单增加并抬高价格。",
+  "steps": [
+    {
+      "step_id": "step_001",
+      "step_type": "public_message",
+      "tick_id": "2024-01-02T14:00:00+08:00",
+      "actor_id": "hot_money_a",
+      "event_ref": "forum_post_123",
+      "public_text": "公开帖子被散户群体看到"
+    },
+    {
+      "step_id": "step_002",
+      "step_type": "belief_shift",
+      "tick_id": "2024-01-02T14:02:00+08:00",
+      "actor_id": "retail_cluster",
+      "event_ref": "audit_graph_001",
+      "public_text": "散户群体对上涨叙事的信任增强"
+    },
+    {
+      "step_id": "step_003",
+      "step_type": "order_flow",
+      "tick_id": "2024-01-02T14:02:00+08:00",
+      "actor_id": "market",
+      "event_ref": "mkt_001",
+      "public_text": "买盘增强并推高最新成交价"
+    }
+  ],
+  "metrics": {
+    "price_change_pct": 2.1,
+    "affected_agent_count": 8,
+    "confidence": 0.76
+  }
+}
+```
+
+约束：
+
+- `public_text` 只能使用脱敏解释，不得包含原始 `thought`。
+- `event_ref` 只能引用公开事件或前端专用审计事件。
+- `confidence` 是审计官对链路强弱的估计，不是市场事实。
+- `Frontend_Causal_Chain` 不得写入任何 Agent 可订阅频道。
+
 前端默认不得展示原始 `thought`。如需调试视图展示原始 `thought`，必须满足：
 
 - 只在沙盒外的开发或评审模式开启。
@@ -149,5 +209,5 @@
 - `ExchangeBroadcaster` 的构造函数不得接收 `UI_Audit` 或 Agent payload。
 - `Tape_Alerts.public_text` 不得出现 Agent id、席位真实身份、`thought` 摘要。
 - `End_of_Day` 只能在收盘或模拟收盘阶段发布。
-- `Frontend_Audit_Graph` 不得被 Agent runtime 订阅。
+- `Frontend_Audit_Graph` 和 `Frontend_Causal_Chain` 不得被 Agent runtime 订阅。
 - 注入一条私有 `thought` 后，公共频道不得出现其原文或摘要。

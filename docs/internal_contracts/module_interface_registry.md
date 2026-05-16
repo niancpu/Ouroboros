@@ -8,7 +8,7 @@
 
 | 模块 | 层级 | 职责 | 拥有的数据 | 禁止事项 | 主要接口 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `MetaOrchestrator` | Control Plane | 推进 Tick、Agent 生命周期、并发屏障、payload 路由切割 | `tick_id`、运行状态、trace 日志 | 生成市场信号、改写账本、发布私有 payload | `release(tick_id)`、`act(tick_context)`、`match_and_clear(order_batch)` |
+| `MetaOrchestrator` | Control Plane | 推进 Tick、Agent 生命周期、并发屏障、payload 路由切割 | `tick_id`、运行状态、trace 日志 | 生成市场信号、改写账本、发布私有 payload | `run_tick(tick_id)`、`split_payload(payload)`、`handle_lifecycle(risk_result)` |
 | `Chronos` | Layer 0 | 按 Tick 释放历史事实 | `Chronos Data`、历史事件索引 | 释放未来事实、让 Agent 直查全量库 | `release_facts(tick_id)` |
 | `AgentRuntime` | Layer 1 | 维护 Agent 私有记忆、生成 action/thought | `Private Memory`、认知状态、只读资产快照 | 修改资产 SSOT、读取其他 Agent 记忆 | `act(tick_context)` |
 | `LLMGateway` | Infra | API 路由、限流、模型供应商抽象 | 请求队列、限流状态 | 持久化业务事实、跨 Agent 拼接上下文 | `complete(agent_prompt)` |
@@ -16,7 +16,7 @@
 | `MatchingEngine` | Layer 3 | 维护 LOB、价格优先时间优先撮合 | `LOB`、订单状态 | 读取 Agent 私有 thought | `submit_orders(order_batch)`、`publish_market_view(tick_id)` |
 | `ClearingHouse` | Layer 3 | 资金、持仓、冻结股、费用、风险状态 | `Global Ledger`、`Positions`、`frozen_shares` | 让 Agent 自行结算 | `settle(trades)`、`snapshot(agent_id)` |
 | `ExchangeBroadcaster` | Referee/Public | 基于匿名市场输出生成盘口异动和盘后披露 | 脱敏市场事件缓存 | 读取或总结私有 thought | `build_tape_alerts(market_events)`、`build_eod_report(tick_id)` |
-| `UIAuditOfficer` | Referee/UI | 基于私有审计材料生成前端拓扑图 | 审计事件缓存 | 输出给 Agent 可订阅频道 | `build_audit_graph(ui_audit_batch)` |
+| `UIAuditOfficer` | Referee/UI | 基于私有审计材料生成前端拓扑图和因果链 | 审计事件缓存 | 输出给 Agent 可订阅频道 | `build_audit_graph(ui_audit_batch)`、`build_causal_chain(audit_context)` |
 | `FrontendRealtimeGateway` | Layer 4 | 向前端推送市场视图和审计视图 | WebSocket 会话状态 | 作为 Agent 输入源 | WebSocket push |
 
 ## 调用拓扑
@@ -40,11 +40,11 @@ Chronos -> Official_News -> AgentRuntime
 MatchingEngine -> Market_Price -> AgentRuntime / Frontend
 ClearingHouse -> Account_Snapshot -> 对应 AgentRuntime / Frontend
 ExchangeBroadcaster -> Tape_Alerts / End_of_Day -> AgentRuntime / Frontend
-MetaOrchestrator -> Forum_Rumors -> 散户 AgentRuntime / Frontend
-UIAuditOfficer -> Frontend_Audit_Graph -> Frontend only
+MetaOrchestrator -> Forum_Rumors(validated forum_post) -> 散户 AgentRuntime / Frontend
+UIAuditOfficer -> Frontend_Audit_Graph / Frontend_Causal_Chain -> Frontend only
 ```
 
-说明：Agent 是 `Order_Input`、`UI_Audit`、`Forum_Rumors` 的语义来源，但实际频道发布者必须是 Meta-Orchestrator。Agent 原始 payload 不得绕过控制面直写公共频道。
+说明：Agent 是 `Order_Input`、`UI_Audit`、`Forum_Rumors` 的语义来源；Meta-Orchestrator 只负责校验和转发，不生成论坛内容。Agent 原始 payload 不得绕过控制面直写公共频道。
 
 ## 接口形态
 

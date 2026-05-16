@@ -17,6 +17,7 @@
 | `End_of_Day` | 交易所数据播报员 | 全员、前端 | 是 | 收盘统计、龙虎榜延迟披露 |
 | `Forum_Rumors` | Meta-Orchestrator | 散户、可配置 Agent、前端 | 是 | 允许发帖 Agent 的公开小作文，经控制面校验后发布 |
 | `Frontend_Audit_Graph` | UI 渲染审查官 | 前端 | 否 | 拓扑连线、脱敏解释、审计可视化 |
+| `Frontend_Causal_Chain` | UI 渲染审查官 | 前端 | 否 | 脱敏因果链时间线 |
 
 ## 控制面约束
 
@@ -40,7 +41,7 @@ Agent N ===(payload)===> Meta-Orchestrator ===(thought)==> [Channel: UI_Audit]  
 
 - `Order_Input` 只允许承载订单动作，不允许携带 `thought`、私有推理、未公开意图。
 - `UI_Audit` 可以承载私有审计材料，但任何 Agent 都不得订阅。
-- `Frontend_Audit_Graph` 只能被前端订阅，不得被 Agent runtime、撮合引擎、策略调度器订阅。
+- `Frontend_Audit_Graph` 和 `Frontend_Causal_Chain` 只能被前端订阅，不得被 Agent runtime、撮合引擎、策略调度器订阅。
 
 ## Agent 合法输入路由
 
@@ -57,7 +58,7 @@ Meta-Orchestrator ===> [Channel: Forum_Rumors]  ==> 散户/可配置 Agent
 
 - Agent 的下一轮决策输入只能来自上表中的合法输入频道。
 - UI 审计通道和前端审计图不得作为 Agent 上下文。
-- `Account_Snapshot` 只能进入对应 Agent 的本地只读副本，不得作为全市场广播。
+- `Account_Snapshot` 在 Agent 侧只能进入对应 Agent 的本地只读副本；前端只能通过 Web API 审计视图消费，不得作为全市场广播或 Agent 输入。
 - 盘中广播只能描述匿名订单流和市场物理状态；身份级、动机级信息只能在盘后延迟披露中以席位统计形式出现。
 
 ## 最小消息字段
@@ -150,11 +151,39 @@ Meta-Orchestrator ===> [Channel: Forum_Rumors]  ==> 散户/可配置 Agent
 }
 ```
 
+### `Frontend_Causal_Chain`
+
+```json
+{
+  "schema_version": "v1",
+  "event_id": "chain_001",
+  "tick_id": "2024-01-02T14:03:00+08:00",
+  "producer": "ui_audit_officer",
+  "chain_id": "chain_001",
+  "title": "游资帖子触发散户追涨",
+  "steps": [
+    {
+      "step_id": "step_001",
+      "step_type": "public_message",
+      "event_ref": "forum_post_123",
+      "public_text": "公开帖子被散户群体看到"
+    },
+    {
+      "step_id": "step_002",
+      "step_type": "belief_shift",
+      "event_ref": "audit_graph_001",
+      "public_text": "散户信念上升"
+    }
+  ],
+  "visibility": "frontend_only"
+}
+```
+
 ## 实现检查项
 
-- Agent runtime 不注册 `UI_Audit` 和 `Frontend_Audit_Graph` 订阅。
+- Agent runtime 不注册 `UI_Audit`、`Frontend_Audit_Graph` 和 `Frontend_Causal_Chain` 订阅。
 - 撮合引擎不读取 `thought`。
 - 交易所数据播报员不读取 Agent 私有输出。
 - UI 渲染审查官的输出不写入 Agent 可订阅频道。
-- `Account_Snapshot` 只能由 Layer 3 发布，并且只能被对应 Agent 消费。
+- `Account_Snapshot` 只能由 Layer 3 发布；Agent 侧只能被对应 Agent 消费，前端侧只能作为审计视图消费。
 - 集成测试必须覆盖：向 `UI_Audit` 写入私有 thought 后，任意 Agent 合法输入中都不能出现该内容。

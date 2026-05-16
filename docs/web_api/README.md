@@ -67,7 +67,7 @@
 | `market.end_of_day` | ExchangeBroadcaster `End_of_Day` | `referee_publication_contract.md` |
 | `agent.account_snapshot` | Layer 3 `Account_Snapshot` | `order_and_clearing_contract.md` |
 | `audit.graph` | UIAuditOfficer `Frontend_Audit_Graph` | `referee_publication_contract.md` |
-| `audit.causal_chain` | UIAuditOfficer 脱敏审计结果 | `referee_publication_contract.md` |
+| `audit.causal_chain` | UIAuditOfficer `Frontend_Causal_Chain` | `referee_publication_contract.md` |
 | `runtime.tick_state` | Meta-Orchestrator | `tick_lifecycle.md` |
 | `runtime.agent_lifecycle` | Meta-Orchestrator | `tick_lifecycle.md` |
 

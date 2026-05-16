@@ -121,11 +121,11 @@ Meta-Orchestrator 可以提交系统级 `forced_liquidation` action，但该 act
 Meta-Orchestrator 调用 Referee 的两个隔离实体：
 
 - 交易所数据播报员：读取 Layer 3 匿名市场输出，发布 `Tape_Alerts` 或 `End_of_Day`。
-- UI 渲染审查官：读取 `UI_Audit`，发布 `Frontend_Audit_Graph`。
+- UI 渲染审查官：读取 `UI_Audit`，发布 `Frontend_Audit_Graph` 和 `Frontend_Causal_Chain`。
 
 约束：
 
-- `Frontend_Audit_Graph` 不得回流 Agent。
+- `Frontend_Audit_Graph` 和 `Frontend_Causal_Chain` 不得回流 Agent。
 - 交易所数据播报员不得读取 Agent 私有 `thought`。
 
 ### `COMMIT_TICK`
