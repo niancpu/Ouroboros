@@ -11,7 +11,7 @@
 | `Order_Input` | Meta-Orchestrator | Layer 3 撮合引擎 | 否 | Agent 交易动作经控制面切割后的订单输入 |
 | `UI_Audit` | Meta-Orchestrator | UI 渲染审查官 | 否 | Agent 私有 `thought`、`belief_shift` 经控制面切割后的审计输入 |
 | `Official_News` | Layer 0 | 机构、游资、可配置 Agent | 是 | 官方事实、公告、财报、监管函 |
-| `Market_Price` | Layer 3 撮合引擎 | 全员、前端 | 是 | 价格、成交、盘口快照 |
+| `Market_Price` | MarketDataPublisher | 全员、前端 | 是 | 价格、成交、盘口快照 |
 | `Account_Snapshot` | Layer 3 清算引擎 | 对应 Agent、前端审计视图 | 仅对应 Agent | 成交后的资金、持仓、冻结股只读副本 |
 | `Tape_Alerts` | 交易所数据播报员 | 全员、前端 | 是 | 匿名盘口异动播报 |
 | `End_of_Day` | 交易所数据播报员 | 全员、前端 | 是 | 收盘统计、龙虎榜延迟披露 |
@@ -23,6 +23,8 @@
 ## 控制面约束
 
 Meta-Orchestrator 可以接收 Agent 完整 payload，但它不是公共消息总线。
+
+本文中的“最小消息字段”只列各频道的业务字段最小集。实际跨模块事件必须叠加 `module_interface_registry.md` 中定义的通用消息头，包括 `trace_id`、`visibility`、`created_at` 等字段；实现侧应由事件封装层统一附加和校验。
 
 约束：
 
@@ -74,7 +76,7 @@ Agent N ===(payload)===> Meta-Orchestrator ===(thought)==> [Channel: UI_Audit]  
 
 ```text
 Layer 0 真实数据 =======> [Channel: Official_News] ==> 机构/游资/可配置 Agent
-Layer 3 撮合引擎 =======> [Channel: Market_Price]  ==> 全员
+MarketDataPublisher ====> [Channel: Market_Price]  ==> 全员
 Layer 3 清算引擎 =======> [Channel: Account_Snapshot] ==> 对应 Agent
 交易所数据播报员 ======> [Channel: Tape_Alerts]   ==> 全员
 交易所数据播报员 ======> [Channel: End_of_Day]    ==> 全员

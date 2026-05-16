@@ -15,7 +15,7 @@
 | `AgentRuntime` | Layer 1 | 维护 Agent 私有记忆、生成 action/thought | `Private Memory`、认知状态、只读资产快照、Prompt Profile 引用 | 修改资产 SSOT、读取其他 Agent 记忆 | `act(tick_context)`、`memory_read(query)`、`memory_write(summary)` |
 | `LLMGateway` | Infra | API 路由、限流、模型供应商抽象、模型输出格式预检 | 请求队列、限流状态 | 持久化业务事实、跨 Agent 拼接上下文、做最终安全路由判断 | `complete(agent_prompt)`、`precheck_structured_output(raw_output)` |
 | `RedisBus` | Layer 2 | 按权限转发事件与短期快照 | 可过期消息、订阅关系 | 成为业务 SSOT、承载私有 thought 公共广播 | Pub/Sub channels |
-| `MatchingEngine` | Layer 3 | 维护 LOB、价格优先时间优先撮合、生成成交批次 | `LOB`、订单状态 | 读取 Agent 私有 thought、直接发布公共市场快照 | `submit_orders(order_batch)`、`match_orders(tick_id)` |
+| `MatchingEngine` | Layer 3 | 维护 LOB、价格优先时间优先撮合、生成成交批次 | `LOB`、订单状态 | 读取 Agent 私有 thought、直接发布公共市场快照 | `initialize_market(seed)`、`submit_orders(order_batch)`、`match_orders(tick_id)` |
 | `ClearingHouse` | Layer 3 | 资金、持仓、冻结股、费用、风险状态 | `Global Ledger`、`Positions`、`frozen_shares` | 让 Agent 自行结算 | `settle(trades)`、`snapshot(agent_id)` |
 | `MarketDataPublisher` | Layer 3 | 生成合规成交、价格和 Level-2 快照 | 脱敏市场快照缓存 | 发布底层 LOB、订单 id、身份绑定意图 | `publish_market_view(tick_id)`、`build_market_price(trades, lob_view)` |
 | `ExchangeBroadcaster` | Referee/Public | 基于匿名市场输出生成盘口异动和盘后披露 | 脱敏市场事件缓存 | 读取或总结私有 thought | `build_tape_alerts(market_events)`、`build_eod_report(tick_id)` |

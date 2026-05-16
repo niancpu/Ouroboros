@@ -23,6 +23,7 @@
 | `RedisBus` | `channel_routing.md` | 频道发布者、订阅者、可见性等级、泄露拦截点 |
 | `MatchingEngine` | `order_and_clearing_contract.md` | 订单输入、拒单、撮合、LOB 可见性 |
 | `ClearingHouse` | `order_and_clearing_contract.md`、`state_ownership.md` | 资金、持仓、冻结股、账户快照、风险状态 |
+| `MarketDataPublisher` | `order_and_clearing_contract.md` | 成交、价格、Level-2 快照生成与 `Market_Price` 发布 |
 | `ExchangeBroadcaster` | `referee_publication_contract.md` | 盘口异动、盘后龙虎榜、匿名市场播报 |
 | `UIAuditOfficer` | `referee_publication_contract.md` | 前端拓扑图、脱敏因果链、审计隔离 |
 | `FrontendRealtimeGateway` | `../web_api/realtime_ws.md`、`../web_api/control_rest.md` | 前端实时推送、会话控制、快照恢复 |
