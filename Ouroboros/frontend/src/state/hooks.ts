@@ -43,7 +43,10 @@ export function useControlCommand(action: ControlAction): ControlCommandHook {
     ui.clearControlError(action);
     try {
       if (action === "start") {
-        await rest.startSession(sessionId);
+        const data = await rest.startSession(sessionId);
+        if (data.accepted) {
+          session.markControlAccepted(data.status);
+        }
       } else if (action === "pause") {
         await rest.pauseSession(sessionId);
       } else if (action === "step") {

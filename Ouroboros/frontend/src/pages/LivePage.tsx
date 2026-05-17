@@ -32,7 +32,7 @@ import {
 } from "../utils/derive";
 import { eventText } from "../utils/eventReader";
 import { displaySession, formatTick } from "../utils/format";
-import type { EdgeFilterMode } from "../utils/graph";
+import { agentSummaryToGraphNode, type EdgeFilterMode } from "../utils/graph";
 import {
   useControlCommand,
   useDerivedVisualState,
@@ -67,6 +67,7 @@ interface RecommendationProgress {
   active: number;
   completed: number;
   timeout: number;
+  failed: number;
   total: number;
   canAdvance: boolean;
 }
@@ -204,6 +205,7 @@ export function LivePage() {
 
   const [scrubIndex, setScrubIndex] = useState<number>(-1);
   const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedReasonRef, setSelectedReasonRef] = useState<string | null>(null);
   const [edgeMode, setEdgeMode] = useState<EdgeFilterMode>("current");
 
@@ -224,8 +226,9 @@ export function LivePage() {
       snapshotData,
       sessionAgentCount: sessionData?.agent_count ?? agentRoster.length,
       sessionActiveAgentCount: sessionData?.active_agent_count ?? agentRoster.length,
+      isStarting: startCmd.inFlight || sessionStatus === "running",
     }),
-    [agentRoster.length, displayTick, sessionData, snapshotData, tickEvents],
+    [agentRoster.length, displayTick, sessionData, snapshotData, startCmd.inFlight, sessionStatus, tickEvents],
   );
 
   const startRealtime = useCallback(() => {
@@ -263,9 +266,16 @@ export function LivePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const selectedAgentId = ui.selectedAgentId;
+  useEffect(() => {
+    setSelectedAgentId(null);
+    setSelectedReasonRef(null);
+  }, [sessionId]);
+
   const selectedAgentAccount = selectedAgentId ? agentRoster.find((a) => a.agent_id === selectedAgentId) ?? null : null;
-  const selectedNode = selectedAgentId ? auditGraph.nodes.find((n) => n.agent_id === selectedAgentId) ?? null : null;
+  const selectedNode = selectedAgentId
+    ? auditGraph.nodes.find((n) => n.agent_id === selectedAgentId)
+      ?? (selectedAgentAccount ? agentSummaryToGraphNode(selectedAgentAccount, 0) : null)
+    : null;
   const selectedEdges = selectedAgentId
     ? auditGraph.edges.filter((e) => e.source === selectedAgentId || e.target === selectedAgentId)
     : [];
@@ -388,7 +398,7 @@ export function LivePage() {
               selectedReasonRef={selectedReasonRef}
               tickId={displayTick}
               onHoverAgent={setHoveredAgentId}
-              onSelectAgent={ui.setSelectedAgentId}
+              onSelectAgent={setSelectedAgentId}
               onSelectReason={setSelectedReasonRef}
               onEdgeModeChange={setEdgeMode}
             />
@@ -421,7 +431,7 @@ export function LivePage() {
 
 function RecommendationStatusPanel({ progress }: { progress: RecommendationProgress }) {
   const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
-  const pending = Math.max(progress.total - progress.completed - progress.timeout, 0);
+  const pending = Math.max(progress.total - progress.completed - progress.timeout - progress.failed, 0);
   return (
     <aside className="recommendation-status" aria-label="当前推荐进度">
       <h2>推荐进度</h2>
@@ -438,6 +448,8 @@ function RecommendationStatusPanel({ progress }: { progress: RecommendationProgr
         <b>{pending}</b>
         <span>超时</span>
         <b>{progress.timeout}</b>
+        <span>失败</span>
+        <b>{progress.failed}</b>
         <span>活跃</span>
         <b>{progress.active}</b>
         <span>可推进</span>
@@ -453,12 +465,14 @@ function deriveRecommendationProgress({
   snapshotData,
   sessionAgentCount,
   sessionActiveAgentCount,
+  isStarting,
 }: {
   tickEvents: ReadonlyArray<{ tick_id: string; payload: unknown }>;
   displayTick: string;
   snapshotData: SnapshotData | null;
   sessionAgentCount: number;
   sessionActiveAgentCount: number;
+  isStarting: boolean;
 }): RecommendationProgress {
   const event = pickTickStateEvent(tickEvents, displayTick);
   if (event) {
@@ -466,22 +480,37 @@ function deriveRecommendationProgress({
     const active = normalizeCount(payload.active_agent_count);
     const completed = normalizeCount(payload.completed_agent_count);
     const timeout = normalizeCount(payload.timeout_agent_count);
+    const failed = normalizeCount(payload.failed_agent_count);
     return {
       state: payload.state,
       active,
       completed,
       timeout,
-      total: Math.max(active, completed + timeout, sessionAgentCount, 0),
+      failed,
+      total: Math.max(active, completed + timeout + failed, sessionAgentCount, 0),
       canAdvance: Boolean(payload.can_advance),
     };
   }
 
   const total = Math.max(sessionAgentCount, snapshotData?.agents.length ?? 0);
+  if (isStarting && total > 0) {
+    return {
+      state: snapshotData?.tick_state ?? "INIT_TICK",
+      active: Math.max(sessionActiveAgentCount, total),
+      completed: 0,
+      timeout: 0,
+      failed: 0,
+      total,
+      canAdvance: false,
+    };
+  }
+
   return {
     state: snapshotData?.tick_state ?? "",
     active: Math.max(sessionActiveAgentCount, total),
     completed: snapshotData?.tick_state === "COMMIT_TICK" ? total : 0,
     timeout: 0,
+    failed: 0,
     total,
     canAdvance: snapshotData?.tick_state === "COMMIT_TICK",
   };
@@ -503,12 +532,24 @@ function tickStateLabel(state: TickState | ""): string {
   switch (state) {
     case "CHRONOS_SEED":
       return "生成公开输入";
+    case "INIT_TICK":
+      return "初始化节拍";
+    case "RELEASE_FACTS":
+      return "释放公开输入";
+    case "PUBLISH_MARKET_VIEW":
+      return "发布行情视图";
     case "PAYLOAD_SPLIT":
       return "分发输入";
     case "AGENT_STEP":
       return "智能体推荐";
+    case "BARRIER_WAIT":
+      return "等待智能体屏障";
     case "MATCH_AND_CLEAR":
       return "撮合清算";
+    case "RISK_AND_LIFECYCLE":
+      return "风险与生命周期";
+    case "REFEREE_PUBLICATION":
+      return "发布审计结果";
     case "COMMIT_TICK":
       return "提交节拍";
     case "FAILED":

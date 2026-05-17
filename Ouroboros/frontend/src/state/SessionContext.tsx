@@ -15,6 +15,7 @@ type Action =
   | { type: "create/start" }
   | { type: "create/success"; session: SessionData }
   | { type: "create/error"; error: ApiError }
+  | { type: "control/accepted"; status: SessionData["status"] }
   | { type: "refresh/success"; session: SessionData }
   | { type: "refresh/error"; error: ApiError }
   | { type: "control/error"; error: ApiError }
@@ -32,6 +33,16 @@ function reducer(state: SessionPhase, action: Action): SessionPhase {
       return { kind: "active", session: action.session, lastError: null };
     case "create/error":
       return { kind: "none", lastError: action.error };
+    case "control/accepted":
+      if (state.kind !== "active") return state;
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          status: action.status,
+        },
+        lastError: null,
+      };
     case "refresh/success":
       if (state.kind !== "active") return state;
       return {
@@ -73,6 +84,7 @@ export interface SessionContextValue {
   sessionId: string | null;
   createSession(req: CreateSessionRequest): Promise<void>;
   refreshSession(): Promise<void>;
+  markControlAccepted(status: SessionData["status"]): void;
   recordControlError(error: ApiError): void;
   clearControlError(): void;
   markTerminal(stop: StopSessionData): void;
@@ -124,6 +136,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [phase, rest]);
 
+  const markControlAccepted = useCallback((status: SessionData["status"]) => {
+    dispatch({ type: "control/accepted", status });
+  }, []);
+
   const recordControlError = useCallback((error: ApiError) => {
     dispatch({ type: "control/error", error });
   }, []);
@@ -150,12 +166,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       sessionId,
       createSession,
       refreshSession,
+      markControlAccepted,
       recordControlError,
       clearControlError,
       markTerminal,
       reset,
     }),
-    [phase, sessionId, createSession, refreshSession, recordControlError, clearControlError, markTerminal, reset],
+    [phase, sessionId, createSession, refreshSession, markControlAccepted, recordControlError, clearControlError, markTerminal, reset],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

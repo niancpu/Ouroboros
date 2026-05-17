@@ -78,6 +78,9 @@ class AgentRuntime:
     def last_errors(self) -> Mapping[str, str]:
         return dict(self._last_errors)
 
+    def clear_last_error(self, agent_id: str) -> None:
+        self._last_errors.pop(agent_id, None)
+
     @property
     def raises_llm_errors(self) -> bool:
         return self._raise_llm_errors

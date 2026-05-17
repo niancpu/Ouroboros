@@ -249,6 +249,7 @@ class RuntimeTickStateEvent:
     active_agent_count: int
     completed_agent_count: int
     timeout_agent_count: int
+    failed_agent_count: int = 0
     previous_state: TickState | None = None
     can_advance: bool | None = None
 
@@ -271,6 +272,7 @@ class RuntimeTickStateEvent:
                 "active_agent_count",
                 "completed_agent_count",
                 "timeout_agent_count",
+                "failed_agent_count",
                 "can_advance",
             },
             "RuntimeTickStateEvent",
@@ -304,6 +306,9 @@ class RuntimeTickStateEvent:
             timeout_agent_count=require_int(
                 data.get("timeout_agent_count"), "timeout_agent_count", minimum=0
             ),
+            failed_agent_count=require_int(
+                data.get("failed_agent_count", 0), "failed_agent_count", minimum=0
+            ),
             can_advance=can_advance,
         )
 
@@ -334,4 +339,3 @@ class RuntimeAgentLifecycleEvent:
 
     def to_dict(self) -> dict[str, Any]:
         return to_plain_data(self)
-

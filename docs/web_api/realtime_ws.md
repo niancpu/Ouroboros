@@ -177,6 +177,7 @@ Ack 确认：
     "active_agent_count": 24,
     "completed_agent_count": 24,
     "timeout_agent_count": 0,
+    "failed_agent_count": 0,
     "can_advance": false
   }
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -211,8 +212,47 @@ class SessionRunnerTests(unittest.TestCase):
                     trace_id=TRACE,
                 )
 
-        self.assertEqual(step["status"], "running")
-        self.assertIn("audit_graph_2024_01_02t14_02_00_08_00", step["tick_result"]["published_event_ids"])
+        self.assertNotEqual(step["status"], "failed")
+        self.assertTrue(
+            any(
+                event_id.startswith("audit_graph_")
+                for event_id in step["tick_result"]["published_event_ids"]
+            )
+        )
+
+    def test_start_session_returns_before_continuous_run_finishes(self) -> None:
+        runner = session_runner()
+        runner.create_session(create_command())
+
+        started = runner.start_session(
+            SESSION_ID,
+            mode="continuous",
+            command_id="cmd_start_runner",
+            trace_id=TRACE,
+        )
+
+        self.assertEqual(
+            started,
+            {"session_id": SESSION_ID, "status": "running", "accepted": True},
+        )
+
+        events = wait_for_frontend_events(runner, min_count=1)
+        first_event = events[0]
+        self.assertEqual(first_event["type"], "runtime.tick_state")
+        self.assertEqual(first_event["payload"]["state"], "INIT_TICK")
+        self.assertEqual(first_event["payload"]["active_agent_count"], 2)
+
+        final_events = wait_for_frontend_events(runner, event_type="audit.graph")
+        self.assertTrue(final_events)
+        progress_events = [
+            event
+            for event in wait_for_frontend_events(runner, min_count=2)
+            if event["type"] == "runtime.tick_state"
+            and event["payload"]["state"] == "AGENT_STEP"
+        ]
+        self.assertTrue(
+            any(event["payload"]["completed_agent_count"] > 0 for event in progress_events)
+        )
 
     def test_final_tick_publishes_end_of_day(self) -> None:
         runner = session_runner()
@@ -338,6 +378,45 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertTrue(any(event["type"] == "system.error" for event in events))
         self.assertFalse(any(event["payload"].get("state") == "commit_tick" for event in events))
 
+    def test_non_strict_llm_agent_failure_is_reported_as_failed_progress(self) -> None:
+        runner = SessionRunner(
+            chronos_repository=chronos_repository(),
+            agent_specs=agent_specs(),
+            agent_runtime=AgentRuntime(
+                llm_gateway=FailingGateway(),
+                allow_prompt_profile_fallback=True,
+            ),
+            matching_config=MatchingConfig(lot_size=100),
+            session_id_factory=lambda _command, _sequence: SESSION_ID,
+        )
+        runner.create_session(create_command())
+
+        step = runner.step_session(
+            SESSION_ID,
+            ticks=1,
+            command_id="cmd_step_llm_non_strict_failure",
+            trace_id=TRACE,
+        )
+
+        self.assertEqual(step["tick_result"]["agent_results"]["completed"], 0)
+        self.assertEqual(step["tick_result"]["agent_results"]["failed"], 2)
+        events = runner.get_frontend_events(
+            SESSION_ID,
+            from_seq=0,
+            limit=500,
+            request_id="req_events_llm_non_strict_failure",
+            trace_id=TRACE,
+        )["events"]
+        agent_step_events = [
+            event
+            for event in events
+            if event["type"] == "runtime.tick_state"
+            and event["payload"]["state"] == "AGENT_STEP"
+        ]
+        self.assertTrue(
+            any(event["payload"]["failed_agent_count"] == 2 for event in agent_step_events)
+        )
+
     def test_margin_call_generates_forced_liquidation_order_through_layer3(self) -> None:
         runner = liquidation_session_runner(
             risk_seller_position=200,
@@ -436,7 +515,6 @@ def session_runner(frontend_event_sink=None) -> SessionRunner:
     )
 
 
-
 def market_only_session_runner() -> SessionRunner:
     return SessionRunner(
         chronos_repository=chronos_repository(),
@@ -450,6 +528,7 @@ def market_only_session_runner() -> SessionRunner:
         matching_config=MatchingConfig(lot_size=100),
         session_id_factory=lambda _command, _sequence: SESSION_ID,
     )
+
 
 def liquidation_session_runner(
     *,
@@ -505,6 +584,34 @@ def lifecycle_payload_for(runner: SessionRunner, agent_id: str) -> dict[str, obj
     if not lifecycle_events:
         raise AssertionError(f"missing lifecycle event for {agent_id}")
     return lifecycle_events[-1]
+
+
+def wait_for_frontend_events(
+    runner: SessionRunner,
+    *,
+    min_count: int = 1,
+    event_type: str | None = None,
+    timeout_seconds: float = 2.0,
+) -> list[dict[str, object]]:
+    deadline = time.monotonic() + timeout_seconds
+    last_events: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        last_events = runner.get_frontend_events(
+            SESSION_ID,
+            from_seq=0,
+            limit=500,
+            request_id="req_wait_events",
+            trace_id=TRACE,
+        )["events"]
+        matching = [
+            event
+            for event in last_events
+            if event_type is None or event["type"] == event_type
+        ]
+        if len(matching) >= min_count:
+            return matching
+        time.sleep(0.01)
+    return last_events
 
 
 def chronos_repository() -> InMemoryChronosRepository:

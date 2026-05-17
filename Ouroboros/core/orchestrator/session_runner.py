@@ -1,13 +1,13 @@
-"""In-process session runner that wires core modules into a Tick loop."""
+﻿"""In-process session runner that wires core modules into a Tick loop."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
+import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,6 @@ from Ouroboros.core.referee import ExchangeBroadcaster, UIAuditOfficer
 from Ouroboros.core.routing import Channel, ChannelRouter
 from Ouroboros.core.schemas import (
     AccountSnapshotEvent,
-    AgentAction,
     AgentPayload,
     AgentPermissionProfile,
     AgentResults,
@@ -72,6 +71,17 @@ from Ouroboros.core.web_api.control_rest import (
 )
 
 from .state_machine import META_ORCHESTRATOR_TICK_SEQUENCE, MetaOrchestratorStateMachine
+from .agent_barrier import run_agent_barrier
+from .session_utils import (
+    default_session_id,
+    frontend_safe_refs as filter_frontend_safe_refs,
+    is_final_tick,
+    next_tick_id,
+    position_value,
+    previous_tick_id,
+    stable_id,
+    tick_after_end,
+)
 
 
 DEFAULT_AGENT_DEADLINE_MS = 30_000
@@ -171,6 +181,7 @@ class _SessionRuntime:
     lifecycle_events: dict[str, RuntimeAgentLifecycleEvent] = field(default_factory=dict)
     frontend_events: list[WebEventEnvelope] = field(default_factory=list)
     next_frontend_seq: int = 1
+    continuous_worker: threading.Thread | None = None
 
     @property
     def session_id(self) -> str:
@@ -252,7 +263,13 @@ class SessionRunner:
         self._clearing_config = clearing_config
         self._matching_config = matching_config
         self._config = runner_config or SessionRunnerConfig()
-        self._session_id_factory = session_id_factory or _default_session_id
+        self._session_id_factory = session_id_factory or (
+            lambda command, sequence: default_session_id(
+                command,
+                sequence,
+                prefix=DEFAULT_SESSION_PREFIX,
+            )
+        )
         self._frontend_event_sink = frontend_event_sink
         self._sessions: dict[str, _SessionRuntime] = {}
         self._orchestrator = MetaOrchestratorStateMachine(
@@ -349,24 +366,21 @@ class SessionRunner:
         runtime = self._require_session(session_id)
         self._ensure_status(runtime, {SessionStatus.CREATED, SessionStatus.PAUSED}, "start")
         runtime.status = SessionStatus.RUNNING
-        tick_results: list[dict[str, Any]] = []
-        while runtime.status == SessionStatus.RUNNING:
-            tick_results.append(
-                self._run_current_tick(
-                    runtime,
-                    command_id=f"{command_id}_{len(tick_results) + 1:06d}",
-                    trace_id=trace_id,
-                    mode=RunMode.CONTINUOUS,
-                ).to_dict()
-            )
-            if runtime.status == SessionStatus.COMPLETED:
-                break
+        runtime.continuous_worker = threading.Thread(
+            target=self._run_continuous_session,
+            name=f"ouroboros-session-{session_id}",
+            kwargs={
+                "runtime": runtime,
+                "command_id": command_id,
+                "trace_id": trace_id,
+            },
+            daemon=True,
+        )
+        runtime.continuous_worker.start()
         return {
             "session_id": session_id,
-            "status": runtime.status.value,
+            "status": SessionStatus.RUNNING.value,
             "accepted": True,
-            "completed_ticks": len(tick_results),
-            "last_tick_result": tick_results[-1] if tick_results else None,
         }
 
     def pause_session(
@@ -536,14 +550,34 @@ class SessionRunner:
         )
         return self._run_tick(runtime, command)
 
+    def _run_continuous_session(
+        self,
+        *,
+        runtime: _SessionRuntime,
+        command_id: str,
+        trace_id: str,
+    ) -> None:
+        tick_count = 0
+        while runtime.status == SessionStatus.RUNNING:
+            tick_count += 1
+            try:
+                self._run_current_tick(
+                    runtime,
+                    command_id=f"{command_id}_{tick_count:06d}",
+                    trace_id=trace_id,
+                    mode=RunMode.CONTINUOUS,
+                )
+            except ControlRestError:
+                break
+        runtime.continuous_worker = None
+
     def _run_tick(self, runtime: _SessionRuntime, command: RunTickCommand) -> RunTickResult:
         try:
-            self._ensure_initialized(runtime, trace_id=command.trace_id)
             artifacts = _TickArtifacts(active_agent_ids=self._active_agent_ids(runtime))
             previous_state: TickState | None = None
             for state in META_ORCHESTRATOR_TICK_SEQUENCE:
                 runtime.tick_state = state
-                self._apply_tick_state(runtime, command, artifacts, state)
+                self._prepare_tick_state_artifacts(runtime, artifacts, state)
                 self._publish_runtime_tick_state(
                     runtime,
                     command,
@@ -551,16 +585,17 @@ class SessionRunner:
                     previous_state=previous_state,
                     artifacts=artifacts,
                 )
+                self._apply_tick_state(runtime, command, artifacts, state)
                 previous_state = state
 
-            next_tick_id = _next_tick_id(command.tick_id, runtime.command.tick_interval)
+            next_tick = next_tick_id(command.tick_id, runtime.command.tick_interval)
             result = RunTickResult(
                 schema_version=SCHEMA_VERSION,
                 command_id=command.command_id,
                 session_id=runtime.session_id,
                 tick_id=command.tick_id,
                 status="committed",
-                next_tick_id=next_tick_id,
+                next_tick_id=next_tick,
                 agent_results=AgentResults(
                     completed=artifacts.completed_agent_count,
                     timeout=artifacts.timeout_agent_count,
@@ -569,10 +604,10 @@ class SessionRunner:
                 published_event_ids=artifacts.published_event_ids,
             )
             runtime.last_trace_id = command.trace_id
-            if _tick_after_end(next_tick_id, runtime.command.end_tick_id):
+            if tick_after_end(next_tick, runtime.command.end_tick_id):
                 runtime.status = SessionStatus.COMPLETED
             else:
-                runtime.current_tick_id = next_tick_id
+                runtime.current_tick_id = next_tick
             runtime.result = CreateSessionResult(
                 schema_version=SCHEMA_VERSION,
                 command_id=runtime.result.command_id,
@@ -634,6 +669,17 @@ class SessionRunner:
 
         runtime.initialized = True
 
+    def _prepare_tick_state_artifacts(
+        self,
+        runtime: _SessionRuntime,
+        artifacts: _TickArtifacts,
+        state: TickState,
+    ) -> None:
+        if state == TickState.INIT_TICK:
+            artifacts.active_agent_ids = self._active_agent_ids(runtime)
+        if state == TickState.AGENT_STEP and not artifacts.active_agent_ids:
+            artifacts.active_agent_ids = self._active_agent_ids(runtime)
+
     def _apply_tick_state(
         self,
         runtime: _SessionRuntime,
@@ -642,7 +688,7 @@ class SessionRunner:
         state: TickState,
     ) -> None:
         if state == TickState.INIT_TICK:
-            artifacts.active_agent_ids = self._active_agent_ids(runtime)
+            self._ensure_initialized(runtime, trace_id=command.trace_id)
             return
         if state == TickState.RELEASE_FACTS:
             self._release_facts(runtime, command, artifacts)
@@ -656,15 +702,29 @@ class SessionRunner:
                 self._build_tick_context(runtime, command, agent_id)
                 for agent_id in artifacts.active_agent_ids
             ]
+
+            def publish_agent_progress(completed: int, timeout: int, failed: int) -> None:
+                artifacts.completed_agent_count = completed
+                artifacts.timeout_agent_count = timeout
+                artifacts.failed_agent_count = failed
+                self._publish_runtime_tick_state(
+                    runtime,
+                    command,
+                    state=TickState.AGENT_STEP,
+                    previous_state=TickState.PUBLISH_MARKET_VIEW,
+                    artifacts=artifacts,
+                )
+
             (
                 artifacts.completed_agent_count,
                 artifacts.timeout_agent_count,
                 artifacts.failed_agent_count,
                 artifacts.payloads,
-            ) = _run_agent_barrier(
+            ) = run_agent_barrier(
                 runtime.agent_runtime,
                 artifacts.contexts,
                 timeout_seconds=self._config.agent_timeout_seconds,
+                on_progress=publish_agent_progress,
             )
             return
         if state == TickState.BARRIER_WAIT:
@@ -692,14 +752,14 @@ class SessionRunner:
         command: RunTickCommand,
         artifacts: _TickArtifacts,
     ) -> None:
-        release_from = runtime.last_release_from_tick or _previous_tick_id(
+        release_from = runtime.last_release_from_tick or previous_tick_id(
             command.tick_id,
             runtime.command.tick_interval,
         )
         result = runtime.chronos.release_facts(
             {
                 "schema_version": SCHEMA_VERSION,
-                "command_id": f"cmd_release_{_stable_id(command.command_id)}",
+                "command_id": f"cmd_release_{stable_id(command.command_id)}",
                 "tick_id": command.tick_id,
                 "trace_id": command.trace_id,
                 "symbol": runtime.command.symbol,
@@ -855,7 +915,7 @@ class SessionRunner:
                     context=context,
                     event_id=route_ids.get(
                         "UI_Audit",
-                        f"audit_{_stable_id(agent_id)}_{_stable_id(payload.tick_id)}",
+                        f"audit_{stable_id(agent_id)}_{stable_id(payload.tick_id)}",
                     ),
                 )
                 runtime.router.publish(
@@ -946,7 +1006,7 @@ class SessionRunner:
             "belief_score": 0.5,
             "position_value": snapshot.market_value if snapshot else 0.0,
             "risk_state": snapshot.risk_state.value if snapshot else "normal",
-            "evidence_refs": _frontend_safe_refs(evidence_refs),
+            "evidence_refs": frontend_safe_refs(evidence_refs),
             "public_reason": "Agent decision audit.",
         }
         return internal, frontend
@@ -1069,7 +1129,7 @@ class SessionRunner:
     ) -> tuple[OrderInputEvent | None, dict[str, Any]]:
         order_event_id = str(
             action.get("order_event_id")
-            or f"forced_liq_{_stable_id(risk.agent_id)}_{_stable_id(command.tick_id)}"
+            or f"forced_liq_{stable_id(risk.agent_id)}_{stable_id(command.tick_id)}"
         )
         snapshot = runtime.clearing_house.account_snapshot(
             risk.agent_id,
@@ -1112,7 +1172,7 @@ class SessionRunner:
                 "price": None,
                 "quantity": liquidation_quantity,
                 "time_in_force": "ioc",
-                "client_order_id": f"system_forced_liquidation_{_stable_id(risk.agent_id)}_{_stable_id(command.tick_id)}",
+                "client_order_id": f"system_forced_liquidation_{stable_id(risk.agent_id)}_{stable_id(command.tick_id)}",
                 "order_kind": "forced_liquidation",
                 "reason_code": risk.reason_code,
                 "source_risk_state": risk.risk_state.value,
@@ -1218,7 +1278,7 @@ class SessionRunner:
         ]
         audit_graph = runtime.ui_audit_officer.publish_audit_graph(
             audit_events,
-            event_id=f"audit_graph_{_stable_id(command.tick_id)}",
+            event_id=f"audit_graph_{stable_id(command.tick_id)}",
             tick_id=command.tick_id,
             trace_id=command.trace_id,
         )
@@ -1246,7 +1306,7 @@ class SessionRunner:
             artifacts,
             audit_graph=audit_graph,
         )
-        if _is_final_tick(command.tick_id, runtime.command.end_tick_id):
+        if is_final_tick(command.tick_id, runtime.command.end_tick_id):
             self._publish_end_of_day(runtime, command, artifacts)
 
     def _publish_causal_chain(
@@ -1260,7 +1320,7 @@ class SessionRunner:
         steps = _causal_chain_steps(command, artifacts, audit_graph)
         if not steps:
             return
-        chain_id = f"chain_{_stable_id(command.tick_id)}"
+        chain_id = f"chain_{stable_id(command.tick_id)}"
         chain = runtime.ui_audit_officer.publish_causal_chain(
             event_id=chain_id,
             tick_id=command.tick_id,
@@ -1308,7 +1368,7 @@ class SessionRunner:
         event = runtime.exchange_broadcaster.publish_end_of_day(
             market_event,
             market_phase="closed",
-            event_id=f"eod_{_stable_id(runtime.command.symbol)}_{_stable_id(command.tick_id)}",
+            event_id=f"eod_{stable_id(runtime.command.symbol)}_{stable_id(command.tick_id)}",
         )
         artifacts.published_event_ids.append(event.event_id)
         self._publish_frontend_event(
@@ -1337,7 +1397,7 @@ class SessionRunner:
                         runtime,
                         command,
                         agent_id=agent_id,
-                        event_id=f"audit_market_{_stable_id(agent_id)}_{_stable_id(command.tick_id)}",
+                        event_id=f"audit_market_{stable_id(agent_id)}_{stable_id(command.tick_id)}",
                         evidence_refs=[market_event_id] if links_to_market_source else [],
                         source_agent_id=market_source or agent_id,
                         belief_shift=0.18,
@@ -1359,7 +1419,7 @@ class SessionRunner:
                         runtime,
                         command,
                         agent_id=buy_agent,
-                        event_id=f"audit_trade_buy_{_stable_id(trade.event_id)}",
+                        event_id=f"audit_trade_buy_{stable_id(trade.event_id)}",
                         evidence_refs=[trade.event_id],
                         source_agent_id=sell_agent or "anonymous_order_flow",
                         belief_shift=0.55,
@@ -1372,7 +1432,7 @@ class SessionRunner:
                         runtime,
                         command,
                         agent_id=sell_agent,
-                        event_id=f"audit_trade_sell_{_stable_id(trade.event_id)}",
+                        event_id=f"audit_trade_sell_{stable_id(trade.event_id)}",
                         evidence_refs=[trade.event_id],
                         source_agent_id=buy_agent or "anonymous_order_flow",
                         belief_shift=0.55,
@@ -1459,7 +1519,7 @@ class SessionRunner:
     ) -> None:
         event = RuntimeTickStateEvent(
             schema_version=SCHEMA_VERSION,
-            event_id=f"runtime_{_stable_id(command.command_id)}_{_stable_id(state.value)}",
+            event_id=f"runtime_{stable_id(command.command_id)}_{stable_id(state.value)}",
             session_id=runtime.session_id,
             tick_id=command.tick_id,
             trace_id=command.trace_id,
@@ -1470,6 +1530,7 @@ class SessionRunner:
             active_agent_count=len(artifacts.active_agent_ids),
             completed_agent_count=artifacts.completed_agent_count,
             timeout_agent_count=artifacts.timeout_agent_count,
+            failed_agent_count=artifacts.failed_agent_count,
             can_advance=state != TickState.COMMIT_TICK,
         )
         self._publish_frontend_event(
@@ -1550,14 +1611,14 @@ class SessionRunner:
         snapshot = runtime.last_account_snapshots.get(agent_id)
         risk = runtime.last_risk_results.get(agent_id)
         lifecycle = runtime.lifecycle_states.get(agent_id, LifecycleState.ACTIVE)
-        initial_position_value = _position_value(spec.positions, spec.mark_prices)
+        initialposition_value = position_value(spec.positions, spec.mark_prices)
         data = {
             "agent_id": agent_id,
             "agent_type": spec.permission_profile.agent_type.value,
             "lifecycle_state": lifecycle.value,
             "risk_state": "normal",
-            "equity": spec.cash + initial_position_value,
-            "position_value": initial_position_value,
+            "equity": spec.cash + initialposition_value,
+            "position_value": initialposition_value,
         }
         if snapshot is not None:
             data.update(
@@ -1647,152 +1708,8 @@ def _coerce_run_tick(command: RunTickCommand | Mapping[str, Any]) -> RunTickComm
     return RunTickCommand.from_dict(command)
 
 
-def _hold_payload(context: TickContext) -> AgentPayload:
-    return AgentPayload(
-        schema_version=SCHEMA_VERSION,
-        tick_id=context.tick_id,
-        trace_id=context.trace_id,
-        agent_id=context.agent_id,
-        action=AgentAction(action_type=OrderActionType.HOLD),
-    )
-
-
-def _run_agent_barrier(
-    agent_runtime: AgentRuntime,
-    contexts: list[TickContext],
-    *,
-    timeout_seconds: float,
-) -> tuple[int, int, int, dict[str, AgentPayload]]:
-    if not contexts:
-        return 0, 0, 0, {}
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(
-            _run_agent_barrier_async(
-                agent_runtime,
-                contexts,
-                timeout_seconds=timeout_seconds,
-            )
-        )
-    raise RuntimeError("SessionRunner.run_tick cannot run inside an active event loop")
-
-
-async def _run_agent_barrier_async(
-    agent_runtime: AgentRuntime,
-    contexts: list[TickContext],
-    *,
-    timeout_seconds: float,
-) -> tuple[int, int, int, dict[str, AgentPayload]]:
-    tasks = [asyncio.create_task(_act_agent(agent_runtime, context)) for context in contexts]
-    results: list[Any] | None = None
-    try:
-        results = await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=timeout_seconds,
-        )
-    except asyncio.TimeoutError:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-    completed = 0
-    timeout = 0
-    failed = 0
-    payloads: dict[str, AgentPayload] = {}
-    if results is not None:
-        for context, result in zip(contexts, results, strict=True):
-            if isinstance(result, Exception):
-                if _agent_runtime_raises_llm_errors(agent_runtime):
-                    raise result
-                failed += 1
-                payloads[context.agent_id] = _hold_payload(context)
-            else:
-                completed += 1
-                payloads[context.agent_id] = result
-        return completed, timeout, failed, payloads
-
-    for context, task in zip(contexts, tasks, strict=True):
-        if task.cancelled():
-            timeout += 1
-            payloads[context.agent_id] = _hold_payload(context)
-            continue
-        try:
-            payloads[context.agent_id] = task.result()
-        except asyncio.CancelledError:
-            timeout += 1
-            payloads[context.agent_id] = _hold_payload(context)
-        except Exception as exc:
-            if _agent_runtime_raises_llm_errors(agent_runtime):
-                raise exc
-            failed += 1
-            payloads[context.agent_id] = _hold_payload(context)
-        else:
-            completed += 1
-    return completed, timeout, failed, payloads
-
-
-def _agent_runtime_raises_llm_errors(agent_runtime: AgentRuntime) -> bool:
-    return bool(getattr(agent_runtime, "raises_llm_errors", False))
-
-
-async def _act_agent(agent_runtime: AgentRuntime, context: TickContext) -> AgentPayload:
-    act_async = getattr(agent_runtime, "act_async", None)
-    if act_async is not None:
-        return await act_async(context)
-    return await asyncio.to_thread(agent_runtime.act, context)
-
-
-def _next_tick_id(tick_id: str, tick_interval: str) -> str:
-    current = _parse_datetime(tick_id, "tick_id")
-    return (current + _parse_interval(tick_interval)).isoformat()
-
-
-def _previous_tick_id(tick_id: str, tick_interval: str) -> str:
-    current = _parse_datetime(tick_id, "tick_id")
-    return (current - _parse_interval(tick_interval)).isoformat()
-
-
-def _tick_after_end(tick_id: str, end_tick_id: str) -> bool:
-    return _parse_datetime(tick_id, "tick_id") > _parse_datetime(end_tick_id, "end_tick_id")
-
-
-def _is_final_tick(tick_id: str, end_tick_id: str) -> bool:
-    return _parse_datetime(tick_id, "tick_id") >= _parse_datetime(end_tick_id, "end_tick_id")
-
-
-def _parse_datetime(value: str, field_name: str) -> datetime:
-    value = require_non_empty_str(value, field_name)
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise SchemaValidationError(f"{field_name} must be an ISO 8601 datetime") from exc
-    if parsed.tzinfo is None:
-        raise SchemaValidationError(f"{field_name} must include timezone information")
-    return parsed
-
-
-def _parse_interval(value: str) -> timedelta:
-    value = require_non_empty_str(value, "tick_interval").strip().lower()
-    unit = value[-1]
-    try:
-        amount = int(value[:-1])
-    except ValueError as exc:
-        raise SchemaValidationError("tick_interval must look like 5m, 1h, or 30s") from exc
-    if amount <= 0:
-        raise SchemaValidationError("tick_interval amount must be > 0")
-    if unit == "s":
-        return timedelta(seconds=amount)
-    if unit == "m":
-        return timedelta(minutes=amount)
-    if unit == "h":
-        return timedelta(hours=amount)
-    raise SchemaValidationError("tick_interval unit must be s, m, or h")
-
-
-def _frontend_safe_refs(refs: Iterable[str]) -> list[str]:
-    return [ref for ref in refs if ref.startswith(FRONTEND_SAFE_EVENT_REF_PREFIXES)]
+def frontend_safe_refs(refs: Iterable[str]) -> list[str]:
+    return filter_frontend_safe_refs(refs, FRONTEND_SAFE_EVENT_REF_PREFIXES)
 
 
 def _causal_chain_summary(chain: CausalChainEvent) -> dict[str, Any]:
@@ -1918,7 +1835,7 @@ def _causal_chain_steps(
                 step_type="order_flow",
                 tick_id=command.tick_id,
                 actor_id="anonymous_order_flow",
-                event_ref=f"trade_{_stable_id(artifacts.trade_batch.batch_id)}",
+                event_ref=f"trade_{stable_id(artifacts.trade_batch.batch_id)}",
                 label="Trades",
                 public_text="Anonymous trade count was attached without order or agent identifiers.",
             )
@@ -1965,7 +1882,6 @@ def _dominant_market_source(artifacts: _TickArtifacts) -> str | None:
     return max(sorted(quantities), key=lambda agent_id: quantities[agent_id])
 
 
-
 def _market_graph_source_agent_id(
     runtime: _SessionRuntime,
     artifacts: _TickArtifacts,
@@ -1998,20 +1914,6 @@ def _market_graph_source_agent_id(
             agent_id,
         ),
     )
-
-def _position_value(
-    positions: Mapping[str, int],
-    mark_prices: Mapping[str, float],
-) -> float:
-    return sum(float(quantity) * float(mark_prices.get(symbol, 0.0)) for symbol, quantity in positions.items())
-
-
-def _default_session_id(command: CreateSessionCommand, sequence: int) -> str:
-    return f"{DEFAULT_SESSION_PREFIX}_{_stable_id(command.scenario_id)}_{sequence:06d}"
-
-
-def _stable_id(value: str) -> str:
-    return "".join(ch if ch.isalnum() else "_" for ch in str(value)).strip("_") or "unknown"
 
 
 def _server_time() -> str:

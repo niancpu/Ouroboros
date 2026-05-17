@@ -150,6 +150,10 @@ _AGENT_MODE_ENV = "OUROBOROS_AGENT_MODE"
 _AGENT_MODE_LLM = "llm"
 _AGENT_MODE_MOCK_HOLD = "mock_hold"
 _AGENT_MODES = frozenset({_AGENT_MODE_LLM, _AGENT_MODE_MOCK_HOLD})
+_LLM_MAX_REQUESTS_ENV = "OUROBOROS_LLM_MAX_REQUESTS_PER_WINDOW"
+_LLM_WINDOW_SECONDS_ENV = "OUROBOROS_LLM_WINDOW_SECONDS"
+_DEFAULT_LLM_MAX_REQUESTS = 2_400
+_DEFAULT_LLM_WINDOW_SECONDS = 60.0
 
 
 def _default_agent_specs() -> list[SessionAgentSpec]:
@@ -368,6 +372,8 @@ def _agent_runtime_factory(agent_mode: str) -> Callable[[], AgentRuntime]:
 def _create_llm_agent_runtime() -> AgentRuntime:
     gateway = LLMGateway(
         config=LLMConfig.from_env(),
+        max_requests=_llm_max_requests_from_env(),
+        window_seconds=_llm_window_seconds_from_env(),
         require_provider_config=True,
     )
     gateway.validate_provider_config()
@@ -376,6 +382,34 @@ def _create_llm_agent_runtime() -> AgentRuntime:
         agent_profiles=_default_agent_profiles(),
         prompt_profiles=_default_prompt_profiles(),
     )
+
+
+def _llm_max_requests_from_env(environ: Mapping[str, str] | None = None) -> int:
+    source = environ if environ is not None else os.environ
+    raw = source.get(_LLM_MAX_REQUESTS_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_LLM_MAX_REQUESTS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SchemaValidationError(f"{_LLM_MAX_REQUESTS_ENV} must be an integer") from exc
+    if value < 1:
+        raise SchemaValidationError(f"{_LLM_MAX_REQUESTS_ENV} must be >= 1")
+    return value
+
+
+def _llm_window_seconds_from_env(environ: Mapping[str, str] | None = None) -> float:
+    source = environ if environ is not None else os.environ
+    raw = source.get(_LLM_WINDOW_SECONDS_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_LLM_WINDOW_SECONDS
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise SchemaValidationError(f"{_LLM_WINDOW_SECONDS_ENV} must be a number") from exc
+    if value <= 0:
+        raise SchemaValidationError(f"{_LLM_WINDOW_SECONDS_ENV} must be > 0")
+    return value
 
 
 _runner = _create_runner()

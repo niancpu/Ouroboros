@@ -95,10 +95,16 @@ export const visibilityLabels: Record<WebApiVisibility, string> = {
 };
 
 export const runtimeStateLabels: Record<TickState, string> = {
+  INIT_TICK: "初始化节拍",
+  RELEASE_FACTS: "释放事实",
+  PUBLISH_MARKET_VIEW: "发布行情视图",
   CHRONOS_SEED: "时间种子",
-  PAYLOAD_SPLIT: "载荷分发",
   AGENT_STEP: "智能体行动",
+  BARRIER_WAIT: "等待屏障",
+  PAYLOAD_SPLIT: "载荷分发",
   MATCH_AND_CLEAR: "撮合清算",
+  RISK_AND_LIFECYCLE: "风险与生命周期",
+  REFEREE_PUBLICATION: "裁判发布",
   COMMIT_TICK: "提交节拍",
   FAILED: "失败",
 };

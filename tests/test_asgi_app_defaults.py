@@ -11,6 +11,8 @@ from Ouroboros.asgi_app import (
     _default_agent_profiles,
     _default_agent_specs,
     _default_prompt_profiles,
+    _llm_max_requests_from_env,
+    _llm_window_seconds_from_env,
 )
 from Ouroboros.core.chronos import ChronosConfigurationError
 from Ouroboros.core.llm import LLMConfig, LLMConfigurationError
@@ -87,6 +89,16 @@ class AsgiAppDefaultAgentTests(unittest.TestCase):
             "prompt_mutual_fund_v1",
         )
         self.assertIn("prompt_mutual_fund_v1", runtime._prompt_profiles)
+        self.assertEqual(runtime._llm_gateway._max_requests, 2400)
+
+    def test_llm_rate_limit_policy_is_configurable_for_continuous_runs(self) -> None:
+        env = {
+            "OUROBOROS_LLM_MAX_REQUESTS_PER_WINDOW": "4800",
+            "OUROBOROS_LLM_WINDOW_SECONDS": "30",
+        }
+
+        self.assertEqual(_llm_max_requests_from_env(env), 4800)
+        self.assertEqual(_llm_window_seconds_from_env(env), 30.0)
 
     def test_llm_runtime_uses_hold_fallback_for_provider_output_failures(self) -> None:
         valid_config = LLMConfig(

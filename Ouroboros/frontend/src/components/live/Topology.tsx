@@ -677,8 +677,12 @@ export function Topology({
     };
     const handlePointerEnd = (event: PointerEvent) => {
       if (nodeDrag?.pointerId === event.pointerId) {
-        suppressNextClick = nodeDrag.moved;
+        const draggedNode = nodeDrag;
+        suppressNextClick = draggedNode.moved;
         nodeDrag = null;
+        if (!draggedNode.moved) {
+          deferUiCallback(() => latestOnSelectAgentRef.current(draggedNode.id));
+        }
       }
       if (event.pointerType === "mouse") {
         mouseDragPoint = null;
@@ -821,11 +825,6 @@ export function Topology({
       </div>
       <div className="topology-canvas" aria-label="推演拓扑图" role="img">
         <div ref={chartHostRef} className="topology-chart" />
-        {visibleEdges.length === 0 && (
-          <div className="topology-empty">
-            当前节拍只有智能体状态，还没有 Agent 之间的消息、交易或信念影响关系。
-          </div>
-        )}
       </div>
     </div>
   );

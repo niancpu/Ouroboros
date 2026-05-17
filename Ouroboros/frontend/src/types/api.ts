@@ -8,10 +8,16 @@ export type SessionStatus =
   | "failed";
 
 export type TickState =
+  | "INIT_TICK"
+  | "RELEASE_FACTS"
+  | "PUBLISH_MARKET_VIEW"
   | "CHRONOS_SEED"
+  | "BARRIER_WAIT"
   | "PAYLOAD_SPLIT"
   | "AGENT_STEP"
   | "MATCH_AND_CLEAR"
+  | "RISK_AND_LIFECYCLE"
+  | "REFEREE_PUBLICATION"
   | "COMMIT_TICK"
   | "FAILED";
 
@@ -191,6 +197,7 @@ export interface RuntimeTickStatePayload {
   active_agent_count: number;
   completed_agent_count: number;
   timeout_agent_count: number;
+  failed_agent_count?: number;
   can_advance: boolean;
 }
 
