@@ -6,6 +6,8 @@
 
 WebSocket 连接由 `FrontendRealtimeGateway` 提供。前端不得直连内部 Redis、内部 Pub/Sub channel、`UI_Audit`、`Order_Input` 或任何 Agent runtime。
 
+页面级消费需求见 [../frontend/frontend_design.md](../frontend/frontend_design.md)。本文是 WebSocket 入口、客户端消息、服务端事件信封和事件 payload 的权威来源。
+
 ## 连接
 
 ```text
@@ -17,7 +19,9 @@ GET /api/v1/sessions/{session_id}/ws
 | 参数 | 必填 | 说明 |
 | :--- | :--- | :--- |
 | `client_id` | 是 | 前端实例 id，用于断线恢复和 ack |
-| `from_seq` | 否 | 断线恢复起始序号，不传则从最新事件开始 |
+| `from_seq` | 否 | 断线恢复起始序号，exclusive 语义；不传则从最新事件开始 |
+
+`from_seq=1024` 表示服务端从 `seq > 1024` 的事件开始回放。前端从 REST 快照恢复时应使用 `from_seq=snapshot.last_seq`。
 
 ## 客户端消息
 
@@ -38,6 +42,15 @@ GET /api/v1/sessions/{session_id}/ws
 }
 ```
 
+`topics` 合法值：
+
+- `runtime`
+- `market`
+- `agent`
+- `audit`
+
+订阅成功后，服务端返回连接控制消息 `subscribed`，并可立即回放符合 topic 且 `seq > from_seq` 的缓存事件。订阅失败必须返回错误控制消息或发送 `system.error`，并在 details 中回填客户端 `request_id`。
+
 ### `ack`
 
 ```json
@@ -57,6 +70,50 @@ GET /api/v1/sessions/{session_id}/ws
   "client_time": "2024-01-02T14:02:01+08:00"
 }
 ```
+
+服务端收到合法 `ping` 后返回：
+
+```json
+{
+  "type": "pong",
+  "request_id": "req_003",
+  "server_time": "2024-01-02T14:02:01+08:00"
+}
+```
+
+`pong` 是连接控制消息，不进入事件回放缓冲，不占用 `seq`。
+
+### 连接控制消息
+
+连接控制消息只响应当前 WebSocket 客户端，不进入事件回放缓冲，不占用 `seq`。
+
+订阅成功：
+
+```json
+{
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "server_time": "2024-01-02T14:02:01+08:00",
+  "data": {
+    "topics": ["runtime", "market"]
+  }
+}
+```
+
+Ack 确认：
+
+```json
+{
+  "schema_version": "v1",
+  "request_id": "req_002",
+  "server_time": "2024-01-02T14:02:01+08:00",
+  "data": {
+    "last_seq": 1024
+  }
+}
+```
+
+客户端不得把连接控制消息写入事件时间线；前端状态恢复仍以 REST `snapshot` 和服务端事件信封为准。
 
 禁止：
 
@@ -106,7 +163,7 @@ GET /api/v1/sessions/{session_id}/ws
 | `agent.account_snapshot` | `agent` | ClearingHouse | 前端审计视图用账户快照 |
 | `audit.graph` | `audit` | UIAuditOfficer | 前端拓扑图和脱敏解释 |
 | `audit.causal_chain` | `audit` | UIAuditOfficer | 前端因果链时间线 |
-| `system.error` | `runtime` | API Gateway | 可恢复或不可恢复错误 |
+| `system.error` | `runtime` | WebApiGateway | 可恢复或不可恢复错误 |
 
 ## `runtime.tick_state`
 
@@ -438,7 +495,8 @@ GET /api/v1/sessions/{session_id}/ws
 ## 背压与断线恢复
 
 - 服务端为每个 `client_id` 保留最近 N 条事件，N 由配置决定。
-- 前端重连时携带 `from_seq`。
+- 前端重连时携带 `from_seq`，服务端返回 `seq > from_seq` 的事件。
 - 如果 `from_seq` 已过期，服务端返回 `SNAPSHOT_REQUIRED`，前端必须先调用 REST 快照接口再重新订阅。
+- 如果连接握手阶段已经能确认 `from_seq` 过期，服务端可以直接拒绝连接并返回 HTTP 409 + REST 错误体；如果 WebSocket 已建立，则发送 `system.error` 后关闭或等待客户端重连。
 - 前端必须定期发送 `ack`，服务端可根据 `last_seq` 清理缓冲。
 - 断线恢复只使用 REST `snapshot` 和 `FrontendRealtimeGateway` 回放缓冲，不要求也不允许前端读取内部 Redis。

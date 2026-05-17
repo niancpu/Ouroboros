@@ -4,7 +4,9 @@
 
 定义前端 API 的可见性边界、错误码和恢复规则。核心要求：前端可以看审计视图，但审计视图不得成为 Agent 输入。
 
-前端访问路径固定为 Web API 层。REST 通过 API Gateway，实时事件通过 `FrontendRealtimeGateway`；前端不得直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或 Agent runtime。
+前端访问路径固定为 Web API 层。REST 通过 `WebApiGateway`，实时事件通过 `FrontendRealtimeGateway`；前端不得直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或 Agent runtime。
+
+页面允许展示什么以 [../frontend/frontend_design.md](../frontend/frontend_design.md) 的页面需求为参考；最终可见性、错误码和恢复规则以本文为准。
 
 ## 可见性等级
 
@@ -26,7 +28,7 @@ Web API visibility 与内部 visibility 分开命名。前端只接收下表中�
 | `frontend_only` | `frontend_only` | 仅 `Frontend_Audit_Graph`、`Frontend_Causal_Chain` 等前端专用脱敏事件 |
 | `control_only` | `control_only_view` | 仅运行状态和错误摘要；不得暴露内部原始 payload |
 
-转换只能由 Web API 层或 `FrontendRealtimeGateway` 完成。前端事件回放只能回放 Web API 事件，不得要求前端读取内部 Redis。
+转换只能由 `WebApiGateway` 或 `FrontendRealtimeGateway` 完成。前端事件回放只能回放 Web API 事件，不得要求前端读取内部 Redis。
 
 禁止通过 Web API 暴露：
 
@@ -134,6 +136,35 @@ WebSocket 错误：
 | `stop` | `created`、`running`、`paused` | 已经 `completed` |
 | `snapshot` | 任意存在状态 | 会话不存在 |
 
+状态语义：
+
+- `pause` 响应为 `paused` 时，表示控制面已经到达安全点并提交暂停。
+- `step` 会短暂进入 `running`，完成一个 Tick 的 `COMMIT_TICK` 后必须自动回到 `paused`。
+- `stop` 在 `created` 状态下可直接完成；在 `running` 状态下必须等当前安全点完成。
+- 操作员停止和自然结束都使用 `completed` 终态，通过 `completion_reason` 区分。
+
+## 状态映射
+
+`risk_state` 是 Layer 3 风险状态，来源是 `Account_Snapshot` 和 `risk_result`。`lifecycle_state` 是 Meta-Orchestrator 对 Agent 运行权限的控制状态。Web API 可以同时展示两者，但不得混用。
+
+默认映射：
+
+| `risk_state` | 默认 `lifecycle_state` | 说明 |
+| :--- | :--- | :--- |
+| `normal` | `active` | 正常参与推演 |
+| `warning` | `active` | 风险预警只影响展示，不默认暂停交易 |
+| `margin_call` | `margin_call` | 已触发强平线，等待控制面处理 |
+| `liquidating` | `liquidating` | 正在强平或清算 |
+| `terminated` | `terminated` | 已终止 |
+
+Meta-Orchestrator 可以因为风控、人工暂停或系统故障把 Agent 置为 `suspended`。`suspended` 不直接来自 Layer 3 `risk_state`，必须带 `reason_code`。
+
+## COT 与账户快照边界
+
+本文中的 COT 指 Agent 原始 `thought`、思维链、Prompt、私有记忆和未公开订单理由，不指 Layer 3 账户快照字段。`agent.account_snapshot` 和 `snapshot.agents` 可以展示账户审计视图，但必须只包含 Web API 允许字段，并不得携带订单理由、原始 payload 或私有推理。
+
+如果后续要对核心机构仓位做角色化脱敏，必须新增 Web API 字段级可见性规则；不得把“禁止展示核心机构 COT”解释成允许透传私有推理，也不得把账户快照当作 COT 调试通道。
+
 ## 断线恢复
 
 前端恢复顺序：
@@ -142,6 +173,8 @@ WebSocket 错误：
 2. 使用快照重建当前 UI。
 3. 用 `from_seq=snapshot.last_seq` 连接 WebSocket。
 4. 如果服务端返回 `SNAPSHOT_REQUIRED`，重新获取快照。
+
+`from_seq` 是 exclusive 语义；服务端必须只回放 `seq > from_seq` 的事件。
 
 快照响应应包含：
 

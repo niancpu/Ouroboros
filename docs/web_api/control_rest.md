@@ -4,7 +4,9 @@
 
 定义前端调用控制面的 REST 接口。REST 只用于会话管理、运行控制和快照查询，不允许前端直接修改市场业务状态。
 
-REST 访问路径固定为 Web API 层/API Gateway。前端不得通过 REST 直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或 Agent runtime。
+REST 访问路径固定为 Web API 层 `WebApiGateway`。前端不得通过 REST 直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或 Agent runtime。
+
+页面级消费需求见 [../frontend/frontend_design.md](../frontend/frontend_design.md)。本文是 REST 端点、请求、响应和状态语义的权威来源。当前代码中的 `ControlRestApi` 是 `WebApiGateway` 的 framework-free 核心适配器；是否外包 FastAPI 只属于部署封装选择，不改变本文协议。
 
 ## 基础路径
 
@@ -16,7 +18,7 @@ REST 访问路径固定为 Web API 层/API Gateway。前端不得通过 REST 直
 
 | Header | 必填 | 说明 |
 | :--- | :--- | :--- |
-| `Content-Type: application/json` | 是 | JSON 请求体 |
+| `Content-Type: application/json` | 有 JSON 请求体时必填 | `GET` 等无请求体请求不要求 |
 | `X-Request-Id` | 是 | 幂等与审计 id |
 
 ## 通用响应
@@ -73,6 +75,11 @@ POST /api/v1/sessions
 
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "session_id": "sim_001",
+  "trace_id": "trace_abc",
+  "server_time": "2024-01-02T09:29:30+08:00",
   "data": {
     "session_id": "sim_001",
     "status": "created",
@@ -97,6 +104,11 @@ GET /api/v1/sessions/{session_id}
 
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "session_id": "sim_001",
+  "trace_id": "trace_abc",
+  "server_time": "2024-01-02T14:02:01+08:00",
   "data": {
     "session_id": "sim_001",
     "status": "running",
@@ -139,6 +151,11 @@ POST /api/v1/sessions/{session_id}/start
 
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "session_id": "sim_001",
+  "trace_id": "trace_abc",
+  "server_time": "2024-01-02T14:02:01+08:00",
   "data": {
     "session_id": "sim_001",
     "status": "running",
@@ -147,10 +164,13 @@ POST /api/v1/sessions/{session_id}/start
 }
 ```
 
+说明：REST `/events` 返回完整 Web API event envelope，字段与 [realtime_ws.md](realtime_ws.md) 的服务端事件信封一致；示例 payload 可为空对象，但事件信封字段不得省略。
+
 约束：
 
 - `start` 只负责把 `created` 或 `paused` 会话切到连续运行。
 - 单步推进统一使用 `/step`，避免与 `start` 语义重叠。
+- 如果会话仍处于 `created`，启动前必须先完成初始化流程并发布第一份合规 `Market_Price`；不得跳过 Chronos 初始种子和 Layer 3 初始化。
 
 ## 暂停会话
 
@@ -170,6 +190,11 @@ POST /api/v1/sessions/{session_id}/pause
 
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "session_id": "sim_001",
+  "trace_id": "trace_abc",
+  "server_time": "2024-01-02T14:02:01+08:00",
   "data": {
     "session_id": "sim_001",
     "status": "paused",
@@ -183,6 +208,7 @@ POST /api/v1/sessions/{session_id}/pause
 - 暂停应在安全点生效。
 - 默认安全点为 `COMMIT_TICK` 后。
 - 不得在 Layer 3 清算中间强停导致账本半提交。
+- 第一版 `pause` 响应表示暂停已经在安全点提交完成；如果实现选择异步接受暂停请求，必须返回 `accepted: true`、`status: running` 和目标安全点，不能伪装成已暂停。
 
 ## 单步推进
 
@@ -202,6 +228,11 @@ POST /api/v1/sessions/{session_id}/step
 
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "session_id": "sim_001",
+  "trace_id": "trace_abc",
+  "server_time": "2024-01-02T14:02:01+08:00",
   "data": {
     "session_id": "sim_001",
     "status": "running",
@@ -214,6 +245,9 @@ POST /api/v1/sessions/{session_id}/step
 
 - `ticks` 第一版只允许 `1`。
 - 只有 `created` 或 `paused` 状态允许单步。
+- `step` 响应表示单步 Tick 已被调度，返回时会话短暂处于 `running`。
+- 该 Tick 到达 `COMMIT_TICK` 后，会话必须自动回到 `paused`；前端通过 `runtime.tick_state` 或会话查询确认完成。
+- 如果会话仍处于 `created`，单步前必须先完成初始化流程并发布第一份合规 `Market_Price`。
 
 ## 获取当前快照
 
@@ -225,6 +259,11 @@ GET /api/v1/sessions/{session_id}/snapshot
 
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "session_id": "sim_001",
+  "trace_id": "trace_abc",
+  "server_time": "2024-01-02T14:02:01+08:00",
   "data": {
     "session_id": "sim_001",
     "last_seq": 1024,
@@ -279,10 +318,17 @@ GET /api/v1/sessions/{session_id}/snapshot
 GET /api/v1/sessions/{session_id}/events?from_seq=1000&limit=500
 ```
 
+`from_seq` 使用 exclusive 语义：返回 `seq > from_seq` 的事件。前端从快照恢复时应传 `from_seq=snapshot.last_seq`。
+
 响应：
 
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "session_id": "sim_001",
+  "trace_id": "trace_abc",
+  "server_time": "2024-01-02T14:02:01+08:00",
   "data": {
     "events": [
       {
@@ -292,7 +338,7 @@ GET /api/v1/sessions/{session_id}/events?from_seq=1000&limit=500
         "payload": {}
       }
     ],
-    "next_from_seq": 1501,
+    "next_from_seq": 1500,
     "has_more": true
   }
 }
@@ -304,6 +350,7 @@ GET /api/v1/sessions/{session_id}/events?from_seq=1000&limit=500
 - 不返回 `Order_Input`、`UI_Audit`、Agent 原始 payload。
 - 不返回内部 Redis 原始消息、内部 channel payload、私有 `thought`、Prompt 或私有记忆。
 - `limit` 必须有服务端上限。
+- `next_from_seq` 是本批次最后一个事件的 `seq`，供下一次请求继续作为 `from_seq` 传入；如果本批次为空，则等于请求的 `from_seq`。
 
 ## 停止会话
 
@@ -323,9 +370,15 @@ POST /api/v1/sessions/{session_id}/stop
 
 ```json
 {
+  "schema_version": "v1",
+  "request_id": "req_001",
+  "session_id": "sim_001",
+  "trace_id": "trace_abc",
+  "server_time": "2024-01-02T14:02:01+08:00",
   "data": {
     "session_id": "sim_001",
-    "status": "completed"
+    "status": "completed",
+    "completion_reason": "operator_stop"
   }
 }
 ```
@@ -334,6 +387,8 @@ POST /api/v1/sessions/{session_id}/stop
 
 - 停止必须先完成当前安全点。
 - 已停止会话不得继续推进 Tick。
+- `created` 状态下没有运行中的 Tick，`stop` 可直接把会话置为 `completed`。
+- `completed` 是终态；用 `completion_reason` 区分 `operator_stop`、`natural_end` 或 `failed_after_stop`，不新增 `stopped` 状态。
 
 ## 禁止的 REST 能力
 

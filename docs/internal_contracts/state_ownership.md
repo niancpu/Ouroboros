@@ -15,7 +15,7 @@
 | 全局历史事实 `Chronos Data` | Layer 0 | Layer 0 Chronos / 历史数据库 / 向量库 | 按 Tick 接收 | 不得一次性读取未来数据 |
 | 私有记忆 `Private Memory` | 对应 Agent | Agent 本地 Memory Store | 本 Agent 读写 | 不得跨 Agent 读取 |
 | Tick 生命周期 | Meta-Orchestrator | Meta-Orchestrator 控制面 | Agent 被动接收 Step | 只有控制面能推进时间 |
-| Redis 广播事件 | 事件发布者 | Layer 2 Redis 总线 | 按频道权限订阅 | Redis 不作为业务 SSOT |
+| Redis 广播事件 | 事件发布者 | Layer 2 Redis 总线 | Agent 按频道权限订阅；前端只能经 Web API 层消费 | Redis 不作为业务 SSOT |
 
 ## 资金与持仓
 
@@ -106,7 +106,8 @@ Redis 的职责是：
 
 - 按频道传递事件。
 - 保存可过期的实时快照。
-- 为前端和 Agent 提供权限隔离后的订阅入口。
+- 为 Agent runtime 提供权限隔离后的内部订阅入口。
+- 为 `WebApiGateway` 和 `FrontendRealtimeGateway` 提供可展示事件输入，但不作为前端直连入口。
 
 Redis 不得成为以下数据的 SSOT：
 
@@ -116,6 +117,8 @@ Redis 不得成为以下数据的 SSOT：
 - 底层 LOB。
 - 全量历史事实。
 - Agent 私有记忆。
+
+前端只能通过 REST `snapshot`、REST `events` 和 WebSocket 前端事件信封消费数据。`ack`、`from_seq`、`last_seq` 只属于前端恢复协议，不得改变任何业务 SSOT。
 
 ## 五个数据中心
 

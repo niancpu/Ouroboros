@@ -4,15 +4,24 @@
 
 定义后端推演系统与前端之间的 API 协议。前端只消费可展示数据和控制面状态，不参与 Agent 决策，不作为任何业务数据的唯一真理源。
 
-前端访问路径固定为 Web API 层：REST 通过 API Gateway，实时事件通过 `FrontendRealtimeGateway`。前端不得直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或任何 Agent runtime。
+前端访问路径固定为 Web API 层：REST 通过 `WebApiGateway`，实时事件通过 `FrontendRealtimeGateway`。前端不得直连内部 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或任何 Agent runtime。
+
+前端页面和视觉需求见 [../frontend/README.md](../frontend/README.md) 与 [../frontend/frontend_design.md](../frontend/frontend_design.md)。如果前端设计需要新增字段，必须先在本文和专项 API 文档中定义字段来源、visibility 和恢复语义。
 
 ## 协议范围
 
 | 文档 | 覆盖范围 |
 | :--- | :--- |
 | [realtime_ws.md](realtime_ws.md) | WebSocket 实时推送：市场、盘口异动、账户快照、审计图、因果链、生命周期事件 |
-| [control_rest.md](control_rest.md) | REST 控制接口：会话创建、启动、暂停、单步、快照查询 |
+| [control_rest.md](control_rest.md) | REST 控制接口：会话创建、启动、暂停、单步、停止、快照查询、事件回放 |
 | [visibility_and_errors.md](visibility_and_errors.md) | 前端可见性边界、错误码、断线恢复规则 |
+
+## 权威边界
+
+- 页面布局、组件和交互需求以 `docs/frontend` 为准。
+- REST 端点、WebSocket 事件、错误码和断线恢复以 `docs/web_api` 为准。
+- 内部频道、模块调用方向和可见性转换以 `docs/internal_contracts` 为准。
+- 架构层只定义 Layer 4 的职责和禁止事项，不替代 API schema。
 
 ## 前端定位
 
@@ -41,9 +50,28 @@
 | REST | 控制命令、快照查询 | 请求必须幂等或带 `request_id` |
 | WebSocket | 实时推送 | 后端主动推送，前端只发送订阅、心跳和 ack |
 
+REST 基础路径为 `/api/v1`。当前对前端开放的 REST 能力只有：
+
+- `POST /api/v1/sessions`
+- `GET /api/v1/sessions/{session_id}`
+- `POST /api/v1/sessions/{session_id}/start`
+- `POST /api/v1/sessions/{session_id}/pause`
+- `POST /api/v1/sessions/{session_id}/step`
+- `POST /api/v1/sessions/{session_id}/stop`
+- `GET /api/v1/sessions/{session_id}/snapshot`
+- `GET /api/v1/sessions/{session_id}/events`
+
+WebSocket 入口为 `GET /api/v1/sessions/{session_id}/ws`。前端客户端消息只允许 `subscribe`、`ack`、`ping`。
+
+术语说明：
+
+- `WebApiGateway` 是架构概念，表示前端 REST 边界。
+- 当前实现类是 framework-free 的 `ControlRestApi`，位于 `Ouroboros/core/web_api/control_rest.py`。
+- `FrontendRealtimeGateway` 同时是架构概念和当前实现类，位于 `Ouroboros/core/web_api/realtime_ws.py`。
+
 ## 可见性映射
 
-内部事件和 Web API 事件使用两套 visibility 枚举。转换只能由 Web API 层或 `FrontendRealtimeGateway` 完成，前端只看到 Web API visibility。
+内部事件和 Web API 事件使用两套 visibility 枚举。转换只能由 `WebApiGateway` 或 `FrontendRealtimeGateway` 完成，前端只看到 Web API visibility。
 
 | 内部 visibility | Web API visibility | 说明 |
 | :--- | :--- | :--- |
@@ -56,7 +84,7 @@
 
 ## 通用字段
 
-所有响应和推送事件必须包含：
+所有 WebSocket 推送事件必须包含：
 
 ```json
 {
@@ -76,6 +104,8 @@
 - `trace_id` 用于排错，不作为 Agent 输入。
 - Web API 响应和推送不得包含原始 `thought`、Prompt、私有记忆、Agent 原始 payload 或内部频道原始消息。
 
+REST 响应必须包含 `schema_version`、`request_id`、`trace_id`、`server_time`，并在请求已绑定会话时包含 `session_id`。`tick_id` 只在会话快照、事件回放或 Tick 相关响应中出现；创建会话前、鉴权失败、schema 失败等错误响应可以没有 `session_id` 和 `tick_id`。
+
 ## 数据来源映射
 
 | 前端事件 | 后端来源 | 内部契约 |
@@ -84,11 +114,12 @@
 | `market.tape_alert` | ExchangeBroadcaster `Tape_Alerts` | `referee_publication_contract.md` |
 | `market.end_of_day` | ExchangeBroadcaster `End_of_Day` | `referee_publication_contract.md` |
 | `forum.post` | Meta-Orchestrator `Forum_Rumors` | `agent_payload_contract.md`、`channel_routing.md` |
-| `agent.account_snapshot` | Layer 3 `Account_Snapshot` | `order_and_clearing_contract.md` |
+| `agent.account_snapshot` | Layer 3 ClearingHouse `Account_Snapshot` | `order_and_clearing_contract.md` |
 | `audit.graph` | UIAuditOfficer `Frontend_Audit_Graph` | `referee_publication_contract.md` |
 | `audit.causal_chain` | UIAuditOfficer `Frontend_Causal_Chain` | `referee_publication_contract.md` |
 | `runtime.tick_state` | Meta-Orchestrator | `tick_lifecycle.md` |
 | `runtime.agent_lifecycle` | Meta-Orchestrator | `tick_lifecycle.md` |
+| `system.error` | Web API 层 | `visibility_and_errors.md` |
 
 ## 版本策略
 

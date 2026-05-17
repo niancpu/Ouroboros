@@ -89,13 +89,15 @@ Agent 编队：
 
 - 按权限转发事件。
 - 承载黑板式公开信息流。
-- 为前端和 Agent 提供短期实时事件缓冲。
+- 为 Agent runtime 和 Web API 适配层提供短期实时事件缓冲。
 
 约束：
 
 - 不拥有资金、持仓、订单簿、历史事实或 Agent 私有记忆。
 - 不作为业务 SSOT。
 - Redis key/channel 必须按会话隔离，缓存必须有 TTL。
+- 前端不得直连 Layer 2 Redis、内部 Pub/Sub channel 或内部事件 payload；前端只能通过 `WebApiGateway` 与 `FrontendRealtimeGateway` 消费 Web API 协议事件。
+- Layer 2 事件的内部 `visibility` 只能由 `WebApiGateway` 或 `FrontendRealtimeGateway` 转换成 Web API visibility，转换规则见 [../web_api/README.md](../web_api/README.md)。
 - WebSocket `ack/replay` 只用于前端断线恢复和事件缓冲清理，不得改变账本、订单、私有记忆或 Tick 状态。
 - `Forum_Rumors_Internal` 只做公开帖子校验和去重，不允许 Agent 订阅。
 
@@ -138,15 +140,23 @@ Referee 边界：
 
 职责：
 
+- 提供前端唯一访问入口：REST 通过 `WebApiGateway`，实时推送通过 `FrontendRealtimeGateway`。
 - 向前端展示市场状态与审计结果。
 - 渲染拓扑图、持仓变化、公开信念变化。
 - 渲染前端因果链，并在断线恢复快照中保留 `causal_chains` 摘要。
+- 将内部事件转换为 Web API 事件，例如 `Market_Price` -> `market.price`、`Frontend_Audit_Graph` -> `audit.graph`。
 
 约束：
 
 - 不展示核心机构 Agent 的私有 COT。
 - 只消费脱敏后的公共事件和前端专用审计数据。
 - 前端因果链只用于解释展示，不得回流 Agent。
+- 不提供下单、改账、改仓、注入 `thought`、写入 `Forum_Rumors` 或读取内部 Redis/channel 的接口。
+- 普通 Web API 不展示原始 `thought`、`thought` 摘要、Prompt、私有记忆、Agent 原始 payload、`UI_Audit` 或内部 channel payload。
+
+Web API 协议见 [../web_api/README.md](../web_api/README.md)、[../web_api/control_rest.md](../web_api/control_rest.md)、[../web_api/realtime_ws.md](../web_api/realtime_ws.md)、[../web_api/visibility_and_errors.md](../web_api/visibility_and_errors.md)。
+
+前端页面与视觉设计见 [../frontend/README.md](../frontend/README.md) 和 [../frontend/frontend_design.md](../frontend/frontend_design.md)。架构文档只定义 Layer 4 边界和长期取舍；页面字段、REST 响应、WebSocket payload 以 Web API 文档为准。
 
 ### 基础设施: LLMGateway
 
@@ -178,8 +188,9 @@ Referee 边界：
 | 模块类别 | 推荐技术/框架 | 说明 |
 | :--- | :--- | :--- |
 | 控制编排层 | LangGraph (Python) | 适合作为 Meta-Orchestrator 的 Tick 状态机骨架。 |
+| Web API 层 | framework-free core adapters + 可选 FastAPI 外层 | `ControlRestApi` 和 `FrontendRealtimeGateway` 定义协议边界；FastAPI 只作为部署封装时不改变协议语义。 |
 | API 路由与限流 | LiteLLM Proxy + Redis | 统一模型接口，多 Key 轮询，吸收并发压力。 |
-| 并发与异步 | `asyncio` + `FastAPI` | 处理高频 API 请求和 WebSocket 推送。 |
+| 并发与异步 | `asyncio` + 可选 ASGI/FastAPI 外层 | 处理高频 API 请求和 WebSocket 推送，核心协议适配器保持框架无关。 |
 | 状态/事件总线 | Redis (Pub/Sub & JSON) | Pub/Sub 用于 Layer 2 广播，RedisJSON 仅缓存只读账户快照。 |
 | 向量记忆库 | Milvus / Qdrant | 存储历史相似事件与 K 线形态。 |
 | 撮合引擎 | Python `heapq` | 维护限价单薄，加入 T+1 与涨跌停逻辑。 |
@@ -191,6 +202,8 @@ Referee 边界：
 - [../internal_contracts/README.md](../internal_contracts/README.md)
 - [../internal_contracts/control_plane_contract.md](../internal_contracts/control_plane_contract.md)
 - [../internal_contracts/agent_profile_prompt_contract.md](../internal_contracts/agent_profile_prompt_contract.md)
+- [../web_api/README.md](../web_api/README.md)
+- [../frontend/README.md](../frontend/README.md)
 - [meta_orchestrator.md](meta_orchestrator.md)
 - [referee_design.md](referee_design.md)
 - [../internal_contracts/module_interface_registry.md](../internal_contracts/module_interface_registry.md)

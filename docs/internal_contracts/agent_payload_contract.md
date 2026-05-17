@@ -31,7 +31,7 @@
     }
   },
   "constraints": {
-    "allowed_actions": ["buy", "sell", "cancel", "hold", "post_forum"],
+    "allowed_actions": ["buy", "sell", "hold", "post_forum"],
     "deadline_ms": 30000,
     "can_post_forum": false
   }
@@ -44,7 +44,7 @@
 - `Market_Price`
 - `Account_Snapshot`，仅限本 Agent
 - `Tape_Alerts`
-- `End_of_Day`
+- `End_of_Day`，仅包含已经公开发布的历史/上一收盘披露；当前交易日未到收盘前必须为空
 - `Forum_Rumors`，按 Agent 权限过滤
 - 本 Agent 的 `Private Memory`
 
@@ -132,7 +132,7 @@ Agent 必须返回结构化 JSON。无论 LLM 原始输出是什么，进入控�
 | :--- | :--- | :--- |
 | `buy` | 买入限价或市价订单 | 是 |
 | `sell` | 卖出限价或市价订单 | 是 |
-| `cancel` | 撤销未成交订单 | 是 |
+| `cancel` | 撤销未成交订单 | 第一版默认不授权；不得进入当前 `Order_Input` schema |
 | `hold` | 本 Tick 无交易动作 | 可记录，不进 LOB |
 | `post_forum` | 公开发帖 | 否，进入 `Forum_Rumors` |
 
@@ -142,6 +142,7 @@ Agent 必须返回结构化 JSON。无论 LLM 原始输出是什么，进入控�
 - `order_type=limit` 必须包含 `price`。
 - Agent 不得提交结算结果、成交价格、扣款结果或持仓变更。
 - Agent 可以表达想卖出数量，但是否可卖由 Layer 3 根据 `available_shares` 和 T+1 规则裁决。
+- 第一版默认不把 `cancel` 放入 `allowed_actions`。如后续启用撤单，必须先补 Layer 3 撤单契约；在此之前收到 `cancel` 应按未授权 action 处理为安全 `hold`。
 
 ## `forum_post` 约束
 

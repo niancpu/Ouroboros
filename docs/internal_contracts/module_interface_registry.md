@@ -20,6 +20,7 @@
 | `MarketDataPublisher` | Layer 3 | 生成合规成交、价格和 Level-2 快照 | 脱敏市场快照缓存 | 发布底层 LOB、订单 id、身份绑定意图 | `publish_market_view(tick_id)`、`build_market_price(trades, lob_view)` |
 | `ExchangeBroadcaster` | Referee/Public | 基于匿名市场输出生成盘口异动和盘后披露 | 脱敏市场事件缓存 | 读取或总结私有 thought | `build_tape_alerts(market_events)`、`build_eod_report(tick_id)` |
 | `UIAuditOfficer` | Referee/UI | 基于私有审计材料生成前端拓扑图和因果链 | 审计事件缓存 | 输出给 Agent 可订阅频道 | `build_audit_graph(ui_audit_batch)`、`build_causal_chain(audit_context)` |
+| `WebApiGateway` | Layer 4 | REST 会话控制、快照查询、事件回放、Web API visibility 转换 | HTTP 请求状态、幂等键、前端事件索引 | 绕过 Meta-Orchestrator 或 Layer 3 改业务状态、透传内部 payload | `/api/v1/sessions/*` |
 | `FrontendRealtimeGateway` | Layer 4 | 向前端推送市场视图和审计视图 | WebSocket 会话状态 | 作为 Agent 输入源 | WebSocket push |
 
 ## 调用拓扑
@@ -46,14 +47,19 @@ MetaOrchestrator
 
 ```text
 Chronos -> Official_News -> AgentRuntime
-MarketDataPublisher -> Market_Price -> AgentRuntime / Frontend
-ClearingHouse -> Account_Snapshot -> 对应 AgentRuntime / Frontend
-ExchangeBroadcaster -> Tape_Alerts / End_of_Day -> AgentRuntime / Frontend
-MetaOrchestrator -> Forum_Rumors(validated forum_post) -> 散户 AgentRuntime / Frontend
-UIAuditOfficer -> Frontend_Audit_Graph / Frontend_Causal_Chain -> Frontend only
+MarketDataPublisher -> Market_Price -> AgentRuntime / FrontendRealtimeGateway
+ClearingHouse -> Account_Snapshot -> 对应 AgentRuntime / FrontendRealtimeGateway
+ExchangeBroadcaster -> Tape_Alerts / End_of_Day -> AgentRuntime / FrontendRealtimeGateway
+MetaOrchestrator -> Forum_Rumors(validated forum_post) -> 散户 AgentRuntime / FrontendRealtimeGateway
+UIAuditOfficer -> Frontend_Audit_Graph / Frontend_Causal_Chain -> FrontendRealtimeGateway only
+WebApiGateway -> MetaOrchestrator: create/start/pause/step/stop session commands
+WebApiGateway -> Frontend: snapshot/events REST responses
+FrontendRealtimeGateway -> Frontend: Web API event envelopes
 ```
 
 说明：Agent 是 `Order_Input`、`UI_Audit`、`Forum_Rumors` 的语义来源；Meta-Orchestrator 只负责校验和转发，不生成论坛内容。Agent 原始 payload 不得绕过控制面直写公共频道。
+
+前端不得订阅内部 Redis channel。上图中的 Frontend 只表示经 `WebApiGateway` 或 `FrontendRealtimeGateway` 转换后的 Web API 协议出口。
 
 ## 接口形态
 
@@ -92,7 +98,7 @@ UIAuditOfficer -> Frontend_Audit_Graph / Frontend_Causal_Chain -> Frontend only
 
 ## 内部与 Web API 可见性映射
 
-内部事件和 Web API 事件使用两套枚举。转换只能由 Web API 层或 FrontendRealtimeGateway 完成。
+内部事件和 Web API 事件使用两套枚举。转换只能由 `WebApiGateway` 或 `FrontendRealtimeGateway` 完成。
 
 | 内部 visibility | Web API visibility | 说明 |
 | :--- | :--- | :--- |
@@ -106,6 +112,8 @@ UIAuditOfficer -> Frontend_Audit_Graph / Frontend_Causal_Chain -> Frontend only
 - `Order_Input`、`UI_Audit`、`trade_batch`、`risk_result` 等内部原始事件不得直接转换成 Web API 事件。
 - Web API 层不得新增比内部 visibility 更宽的可见性。
 - 前端事件回放只能回放 Web API visibility，不得要求前端读取内部 Redis。
+- REST `snapshot` 和 `events` 只能返回 Web API 事件或快照字段，不得返回内部 channel payload。
+- WebSocket `ack/replay` 只能影响 `FrontendRealtimeGateway` 的前端缓冲，不得改变账本、订单、私有记忆或 Tick 状态。
 
 ## 专项契约索引
 
@@ -128,6 +136,7 @@ UIAuditOfficer -> Frontend_Audit_Graph / Frontend_Causal_Chain -> Frontend only
 - `MatchingEngine`、`ClearingHouse` 和 `MarketDataPublisher` 在逻辑上拆分，但第一版可以同进程实现。后果是部署简单，但测试必须仍按三个职责分别覆盖。
 - `LLMGateway` 是基础设施模块，不进入金融数据 SSOT。它只能做模型调用和格式预检；最终安全校验、权限判断和字段路由必须由 Meta-Orchestrator 完成。
 - `FrontendRealtimeGateway` 只消费事件，不参与 Tick 推进。后果是前端掉线不能阻塞撮合和账本提交。
+- `WebApiGateway` 和 `FrontendRealtimeGateway` 是协议适配层，不是新的业务 SSOT。后果是前端协议可以独立演进，但每个 Web API 字段都必须能追溯到内部契约来源。
 
 ## 实现检查项
 

@@ -22,6 +22,9 @@ Meta-Orchestrator 是 Ouroboros 的控制面。它负责全局 Agent 管理、�
 | Data Plane | Layer 2 Redis | 按权限传递事件 | 成为业务 SSOT |
 | Data Plane | Layer 3 | 撮合、清算、维护账本和 LOB | 读取 Agent 私有 `thought` |
 | Data Plane | Referee | 播报市场可见事实、生成前端审计图 | 把 UI 审计结果回流 Agent |
+| Adapter | Web API 层 | REST 会话控制、快照查询、事件回放、前端 WebSocket 推送 | 绕过控制面改业务状态、透传内部事件 payload |
+
+Web API 层是前端唯一入口。REST 命令只能由 `WebApiGateway` 转换为控制面允许的会话操作；实时推送只能由 `FrontendRealtimeGateway` 将内部可展示事件转换为 Web API 事件后发送给前端。
 
 ## 生命周期管理
 
@@ -31,6 +34,8 @@ Meta-Orchestrator 是 Ouroboros 的控制面。它负责全局 Agent 管理、�
 - 请求 Chronos 生成 `initial_market_seed`。
 - 实例化 Agent 进程或协程。
 - 调用 Layer 3 初始化资金池、初始持仓和初始市场状态。
+
+前端创建会话时调用 `POST /api/v1/sessions`。`WebApiGateway` 只负责鉴权、幂等和 schema 校验，然后调用 Meta-Orchestrator 的 `create_session`；不得直接初始化 Layer 0、Layer 3 或 Agent runtime。
 
 初始化流程：
 
@@ -116,6 +121,8 @@ Meta-Orchestrator 决定何时调用：
 - Referee 数据播报员：生成盘口异动、盘后龙虎榜。
 - UI 审计官：生成前端拓扑边与脱敏说明。
 
+Meta-Orchestrator 不直接向浏览器发送内部事件。运行状态、Agent 生命周期和 Tick 状态先作为内部 `control_only` 事件产出，再由 Web API 层转换成 `runtime.tick_state`、`runtime.agent_lifecycle` 或 REST 响应中的前端字段。
+
 ## 权力边界
 
 Meta-Orchestrator 有最高调度权，但没有业务数据所有权。
@@ -141,3 +148,9 @@ Meta-Orchestrator 有最高调度权，但没有业务数据所有权。
 - 超时 Agent 的默认动作：`HOLD` 最安全，但会弱化恐慌行情；`cancel_active_orders` 更偏风控；保留上一 Tick 意图风险最高。
 - 强平阈值：固定亏损比例易实现，按 Agent 类型配置更真实。
 - UI 审计是否阻塞 Tick：建议不阻塞账本推进，只保证审计事件最终到达前端。
+
+## 已定 API 对齐决策
+
+- REST `/start` 和 `/step` 如果从 `created` 状态进入运行，必须先完成初始化流程并发布第一份合规 `Market_Price`，再推进 Agent Tick。
+- REST `/step` 调度一个 Tick 时可短暂进入 `running`，到达 `COMMIT_TICK` 后必须自动回到 `paused`。
+- REST 端点、WebSocket 事件和恢复语义以 [../web_api/README.md](../web_api/README.md) 为准；前端页面需求以 [../frontend/frontend_design.md](../frontend/frontend_design.md) 为准。

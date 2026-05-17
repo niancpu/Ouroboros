@@ -16,6 +16,8 @@
 
 ## `Order_Input` schema
 
+第一版 `Order_Input` 只接收买入、卖出和系统强平订单。Agent `hold` 不生成订单，`post_forum` 不进入 Layer 3，`cancel` 默认不授权；如后续启用撤单，必须新增撤单契约，不能复用买卖订单 schema 暗传撤单。
+
 ```json
 {
   "schema_version": "v1",

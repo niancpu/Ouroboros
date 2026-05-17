@@ -4,6 +4,8 @@
 
 把架构里的每个模块都落到可检查的接口文档上。架构文档说明“系统为什么这样拆”，本目录说明“模块之间怎么说话、谁能看什么、谁能改什么”。
 
+前端页面需求见 [../frontend/README.md](../frontend/README.md)。对前端开放的 REST、WebSocket、错误码和恢复流程见 [../web_api/README.md](../web_api/README.md)。
+
 ## 阅读顺序
 
 1. `module_interface_registry.md`：先看模块总表和调用方向。
@@ -26,7 +28,8 @@
 | `MarketDataPublisher` | `order_and_clearing_contract.md` | 成交、价格、Level-2 快照生成与 `Market_Price` 发布 |
 | `ExchangeBroadcaster` | `referee_publication_contract.md` | 盘口异动、盘后龙虎榜、匿名市场播报 |
 | `UIAuditOfficer` | `referee_publication_contract.md` | 前端拓扑图、脱敏因果链、审计隔离 |
-| `FrontendRealtimeGateway` | `../web_api/realtime_ws.md`、`../web_api/control_rest.md` | 前端实时推送、会话控制、快照恢复 |
+| `WebApiGateway` | `../web_api/control_rest.md`、`../web_api/visibility_and_errors.md` | REST 会话控制、快照查询、事件回放、错误与可见性转换 |
+| `FrontendRealtimeGateway` | `../web_api/realtime_ws.md`、`../web_api/visibility_and_errors.md` | 前端实时推送、WebSocket ack/replay、断线恢复 |
 
 ## 契约完整性标准
 
@@ -48,6 +51,9 @@
 - `Chronos Data` 的唯一真理源在 Layer 0。
 - Tick 只能由 `MetaOrchestrator` 推进。
 - 前端可以看脱敏审计结果，但前端输出不得回流 Agent。
+- 前端唯一访问路径是 Web API 层：REST 通过 `WebApiGateway`，实时事件通过 `FrontendRealtimeGateway`。
+- 前端不得直连 Redis、内部 Pub/Sub channel、Layer 0/1/2/3 模块接口或 Agent runtime。
+- `docs/frontend` 只能引用 Web API 字段，不直接引用内部频道作为可消费接口。
 
 ## 新增接口前的检查
 

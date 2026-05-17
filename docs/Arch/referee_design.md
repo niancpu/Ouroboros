@@ -55,10 +55,11 @@
 
 隔离要求：
 
-- 输出通道只能直连前端 WebSocket。
+- 输出通道只能交给 `FrontendRealtimeGateway` 或 Web API 层生成前端协议事件。
 - 输出不得写入 Agent 可订阅频道。
 - 输出不得被 Layer 1、Layer 2、Layer 3 作为下一轮决策输入。
 - REST 快照中的 `causal_chains` 只能保存脱敏摘要和最近事件引用，不得保存原始 `thought`。
+- 普通 Web API 事件类型只能是 `audit.graph`、`audit.causal_chain` 或快照中的脱敏摘要，不得透传内部 `UI_Audit`、`Frontend_Audit_Graph` 或 `Frontend_Causal_Chain` 原始 payload。
 
 ## 合法播报示例
 

@@ -20,6 +20,8 @@
 | `Frontend_Causal_Chain` | UI 渲染审查官 | 前端 | 否 | 脱敏因果链时间线 |
 | `Forum_Rumors_Internal` | Meta-Orchestrator | 内部校验层 | 否 | 公开帖子校验、去重、映射到前端 `forum.post` |
 
+表中的“前端”是逻辑消费者，实际访问路径必须经过 Web API 层。前端不得直连 Redis、内部 Pub/Sub channel、`UI_Audit`、`Order_Input` 或任何 Agent runtime。
+
 ## 控制面约束
 
 Meta-Orchestrator 可以接收 Agent 完整 payload，但它不是公共消息总线。
@@ -37,14 +39,16 @@ Meta-Orchestrator 可以接收 Agent 完整 payload，但它不是公共消息�
 
 ```text
 Agent N ===(payload)===> Meta-Orchestrator ===(action)===> [Channel: Order_Input] ===> Layer 3 撮合引擎
-Agent N ===(payload)===> Meta-Orchestrator ===(thought)==> [Channel: UI_Audit]    ===> UI 渲染审查官 ===> 前端大屏
+Agent N ===(payload)===> Meta-Orchestrator ===(thought)==> [Channel: UI_Audit]    ===> UI 渲染审查官 ===> FrontendRealtimeGateway ===> 前端
 ```
 
 约束：
 
 - `Order_Input` 只允许承载订单动作，不允许携带 `thought`、私有推理、未公开意图。
+- 第一版 `Order_Input` 只承载 `buy`、`sell` 和系统强平卖出；`hold` 不生成订单，`post_forum` 进入 `Forum_Rumors`，`cancel` 默认未授权且不进入当前 `Order_Input` schema。
 - `UI_Audit` 可以承载私有审计材料，但任何 Agent 都不得订阅。
 - `Frontend_Audit_Graph` 和 `Frontend_Causal_Chain` 只能被前端订阅，不得被 Agent runtime、撮合引擎、策略调度器订阅。
+- `Frontend_Audit_Graph` 和 `Frontend_Causal_Chain` 对前端输出前必须转换为 `audit.graph`、`audit.causal_chain` 或快照中的脱敏摘要，不得原样透传内部事件。
 
 ## `Forum_Rumors` 最小消息字段
 
@@ -90,6 +94,25 @@ Meta-Orchestrator ===> [Channel: Forum_Rumors]  ==> 散户/可配置 Agent
 - `Account_Snapshot` 在 Agent 侧只能进入对应 Agent 的本地只读副本；前端只能通过 Web API 审计视图消费，不得作为全市场广播或 Agent 输入。
 - 盘中广播只能描述匿名订单流和市场物理状态；身份级、动机级信息只能在盘后延迟披露中以席位统计形式出现。
 
+## 前端 Web API 映射
+
+内部频道到前端事件的映射只能由 `WebApiGateway` 或 `FrontendRealtimeGateway` 执行：
+
+| 内部频道 / 事件 | Web API 事件或响应 | 转换限制 |
+| :--- | :--- | :--- |
+| `Market_Price` | `market.price`、REST `snapshot.market` | 不暴露订单 id、Agent 身份或底层 LOB 队列 |
+| `Tape_Alerts` | `market.tape_alert` | 只保留匿名盘口异动 |
+| `End_of_Day` | `market.end_of_day` | 只保留盘后延迟披露字段 |
+| `Forum_Rumors` | `forum.post` | 只保留公开帖子字段 |
+| `Account_Snapshot` | `agent.account_snapshot`、REST `snapshot.agents` | Web API visibility 为 `agent_private_snapshot`；不得开放内部 `agent_private` channel |
+| `Frontend_Audit_Graph` | `audit.graph`、REST `snapshot.audit_graph` | 只保留脱敏节点、边和公开解释 |
+| `Frontend_Causal_Chain` | `audit.causal_chain`、REST `snapshot.causal_chains` | 只保留脱敏因果链和恢复摘要 |
+| Meta-Orchestrator 运行状态 | `runtime.tick_state`、`runtime.agent_lifecycle`、REST 会话状态 | Web API visibility 为 `control_only_view`；不得透传内部 `control_only` payload |
+
+禁止把 `Order_Input`、`UI_Audit`、Agent 原始 payload、`trade_batch`、`risk_result`、Prompt、私有记忆或内部 channel payload 直接转换成 Web API 事件。
+
+页面消费入口见 [../frontend/frontend_design.md](../frontend/frontend_design.md)。前端文档只能引用上表右侧的 Web API 事件或 REST 响应字段，不得把左侧内部频道写成前端可直连接口。
+
 ## 初始化非广播路径
 
 ```text
@@ -113,12 +136,17 @@ MarketDataPublisher -> Market_Price: publish first compliant market snapshot
   "schema_version": "v1",
   "event_id": "evt_001",
   "tick_id": "2024-01-02T14:02:00+08:00",
+  "trace_id": "trace_abc",
   "producer": "meta_orchestrator",
+  "visibility": "control_only",
   "agent_id": "mutual_fund_a",
+  "symbol": "demo_stock",
   "side": "sell",
+  "order_type": "limit",
   "price": 15.2,
   "quantity": 500000,
-  "order_type": "limit"
+  "time_in_force": "day",
+  "client_order_id": "agent_order_001"
 }
 ```
 

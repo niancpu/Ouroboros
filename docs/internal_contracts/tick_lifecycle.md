@@ -36,7 +36,7 @@ Meta-Orchestrator 调用 Layer 0。Layer 0 只发布当前 Tick 允许可见的�
 
 ### `PUBLISH_MARKET_VIEW`
 
-Meta-Orchestrator 调用 Layer 3 的 `MarketDataPublisher` 生成当前可见市场快照，并调用交易所数据播报员生成必要的匿名盘口异动。发布责任固定为：
+Meta-Orchestrator 调用 Layer 3 的 `MarketDataPublisher` 生成当前可见市场快照，并调用交易所数据播报员生成必要的前置匿名盘口异动。这里发布的是 Agent 决策前可见的市场视图，来源必须是上一已提交状态或当前 Tick 释放前已经公开的信息。发布责任固定为：
 
 - `Market_Price`
 - `MarketDataPublisher` 发布合规 Level-2 快照到 `Market_Price`。
@@ -47,6 +47,7 @@ Meta-Orchestrator 调用 Layer 3 的 `MarketDataPublisher` 生成当前可见市
 - 只发布匿名盘口和价格状态。
 - 不发布底层 LOB 队列。
 - 不发布订单身份绑定意图。
+- 本阶段产生的 `Tape_Alerts` 可以进入当前 Tick 的 Agent 输入，因为它们只基于当前 Agent 决策前已经可见的市场状态。
 
 ### `AGENT_STEP`
 
@@ -58,7 +59,7 @@ Agent 输入只能来自合法频道和自己的私有记忆：
 - `Market_Price`
 - `Account_Snapshot`
 - `Tape_Alerts`
-- `End_of_Day`
+- `End_of_Day`，仅限已经发布的历史/上一收盘披露；盘中当前交易日披露必须为空
 - `Forum_Rumors`
 - 自己的 `Private Memory`
 
@@ -127,6 +128,8 @@ Meta-Orchestrator 调用 Referee 的两个隔离实体：
 
 - `Frontend_Audit_Graph` 和 `Frontend_Causal_Chain` 不得回流 Agent。
 - 交易所数据播报员不得读取 Agent 私有 `thought`。
+- 本阶段在 `MATCH_AND_CLEAR` 后生成的 `Tape_Alerts`、`End_of_Day` 和审计事件可以实时给前端展示，但最早只能进入下一 Tick 的 Agent 输入。
+- `End_of_Day` 只能在收盘或模拟收盘阶段发布；发布前不得以空缺字段、预测字段或摘要形式进入当前 Tick Agent 上下文。
 
 ### `COMMIT_TICK`
 
