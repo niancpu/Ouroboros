@@ -41,9 +41,9 @@ export function App() {
           return (
             <div
               aria-label={page.label}
+              aria-hidden={!isActive}
               className="workspace-pane"
               data-module={page.key}
-              hidden={!isActive}
               key={page.key}
             >
               {page.render()}

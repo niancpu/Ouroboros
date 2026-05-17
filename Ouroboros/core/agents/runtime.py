@@ -48,6 +48,7 @@ class AgentRuntime:
         prompt_profiles: Mapping[str, PromptProfile | Mapping[str, Any]] | None = None,
         allow_prompt_profile_fallback: bool = False,
         llm_gateway: LLMGateway | None = None,
+        raise_llm_errors: bool = False,
     ) -> None:
         self._default_actions = dict(default_actions or {})
         self._scripted_actions = {
@@ -63,6 +64,7 @@ class AgentRuntime:
             for profile_id, profile in (prompt_profiles or {}).items()
         }
         self._allow_prompt_profile_fallback = allow_prompt_profile_fallback
+        self._raise_llm_errors = raise_llm_errors
         self._memory: dict[tuple[str, str], list[PrivateMemoryRef]] = defaultdict(list)
         self._namespace_owner: dict[str, str] = dict(
             (namespace, agent_id) for agent_id, namespace in (memory_namespaces or {}).items()
@@ -76,30 +78,48 @@ class AgentRuntime:
     def last_errors(self) -> Mapping[str, str]:
         return dict(self._last_errors)
 
+    @property
+    def raises_llm_errors(self) -> bool:
+        return self._raise_llm_errors
+
     def act(self, tick_context: TickContext | Mapping[str, Any]) -> AgentPayload:
         """Return a schema-valid AgentPayload for one TickContext."""
 
         context = self._coerce_tick_context(tick_context)
+        spec = self._next_action_spec(context.agent_id)
         try:
-            spec = self._next_action_spec(context.agent_id)
             payload = (
                 self._payload_from_llm(context)
                 if spec is None
                 else self._payload_from_spec(context, spec)
             )
         except (SchemaValidationError, ValueError, TypeError):
+            if self._raise_llm_errors and spec is None:
+                raise
             return self._hold_payload(context)
 
         if payload.tick_id != context.tick_id or payload.agent_id != context.agent_id:
+            self._last_errors[context.agent_id] = "payload_identity_mismatch"
+            if self._raise_llm_errors and spec is None:
+                raise SchemaValidationError("payload_identity_mismatch")
             return self._hold_payload(context)
         if payload.trace_id != context.trace_id:
+            self._last_errors[context.agent_id] = "payload_trace_mismatch"
+            if self._raise_llm_errors and spec is None:
+                raise SchemaValidationError("payload_trace_mismatch")
             return self._hold_payload(context)
         if payload.action.action_type not in context.constraints.allowed_actions:
+            self._last_errors[context.agent_id] = "payload_action_not_allowed"
+            if self._raise_llm_errors and spec is None:
+                raise SchemaValidationError("payload_action_not_allowed")
             return self._hold_payload(context)
         if (
             payload.action.action_type == OrderActionType.POST_FORUM
             and not context.constraints.can_post_forum
         ):
+            self._last_errors[context.agent_id] = "payload_forum_not_allowed"
+            if self._raise_llm_errors and spec is None:
+                raise SchemaValidationError("payload_forum_not_allowed")
             return self._hold_payload(context)
 
         payload = self._enforce_forum_permissions(context, payload)
@@ -178,8 +198,10 @@ class AgentRuntime:
             output = self._llm_gateway.complete(request)
             content = output["candidates"][0]["content"]
             payload_data = json.loads(content)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             self._last_errors[context.agent_id] = "payload_parse_error"
+            if self._raise_llm_errors:
+                raise SchemaValidationError("payload_parse_error") from exc
             return self._hold_payload(context)
         except (KeyError, IndexError, TypeError) as exc:
             self._last_errors[context.agent_id] = "payload_parse_error"
@@ -188,12 +210,18 @@ class AgentRuntime:
             message = str(exc)
             if "content must be JSON" in message or "payload_parse_error" in message:
                 self._last_errors[context.agent_id] = "payload_parse_error"
+                if self._raise_llm_errors:
+                    raise SchemaValidationError("payload_parse_error") from exc
                 return self._hold_payload(context)
             self._last_errors[context.agent_id] = message or "llm_error"
+            if self._raise_llm_errors:
+                raise
             return self._hold_payload(context)
 
         if not isinstance(payload_data, Mapping):
             self._last_errors[context.agent_id] = "payload_parse_error"
+            if self._raise_llm_errors:
+                raise SchemaValidationError("payload_parse_error")
             return self._hold_payload(context)
 
         payload_data = dict(payload_data)

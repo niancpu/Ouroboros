@@ -359,6 +359,8 @@ class MetaOrchestratorStateMachine:
         if results is not None:
             for context, result in zip(contexts, results, strict=True):
                 if isinstance(result, Exception):
+                    if _agent_runtime_raises_llm_errors(self.agent_runtime):
+                        raise result
                     failed += 1
                     self.last_agent_payloads[context.agent_id] = _hold_payload(context)
                 else:
@@ -380,7 +382,9 @@ class MetaOrchestratorStateMachine:
             except asyncio.CancelledError:
                 timeout += 1
                 self.last_agent_payloads[context.agent_id] = _hold_payload(context)
-            except Exception:
+            except Exception as exc:
+                if _agent_runtime_raises_llm_errors(self.agent_runtime):
+                    raise exc
                 failed += 1
                 self.last_agent_payloads[context.agent_id] = _hold_payload(context)
             else:
@@ -451,6 +455,10 @@ def _hold_payload(context: TickContext) -> AgentPayload:
         agent_id=context.agent_id,
         action=AgentAction(action_type=OrderActionType.HOLD),
     )
+
+
+def _agent_runtime_raises_llm_errors(agent_runtime: AgentRuntime) -> bool:
+    return bool(getattr(agent_runtime, "raises_llm_errors", False))
 
 
 def _lifecycle_decision_for_risk(risk_state: Any) -> tuple[LifecycleState, str, str]:

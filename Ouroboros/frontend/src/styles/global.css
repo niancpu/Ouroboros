@@ -69,10 +69,11 @@ html,
 body,
 #root {
   width: 100%;
-  min-width: 1280px;
+  min-width: 0;
   min-height: 100%;
   margin: 0;
   background: var(--color-bg);
+  overflow-x: hidden;
 }
 
 button,
@@ -192,16 +193,27 @@ svg {
 
 .workspace {
   min-height: calc(100vh - 64px);
+  position: relative;
   background: var(--color-bg);
-  overflow-x: auto;
+  overflow-x: hidden;
 }
 
 .workspace-pane {
   min-height: calc(100vh - 64px);
 }
 
-.workspace-pane[hidden] {
-  display: none;
+.workspace-pane[aria-hidden="true"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.workspace-pane[aria-hidden="false"] {
+  position: relative;
+  visibility: visible;
 }
 
 .page-grid,
@@ -725,6 +737,10 @@ h3 {
   background: var(--color-surface);
 }
 
+.topology {
+  position: relative;
+}
+
 .topology:fullscreen {
   display: flex;
   flex-direction: column;
@@ -741,11 +757,11 @@ h3 {
 
 .section-title {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
   height: 40px;
-  padding: 0 var(--space-3);
+  padding: 0 min(390px, 52%) 0 var(--space-3);
   border-bottom: var(--line);
   background: var(--color-surface);
   color: var(--color-text-primary);
@@ -768,10 +784,19 @@ h3 {
 }
 
 .canvas-tools {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 5;
   display: flex;
-  height: 100%;
-  min-width: max-content;
+  justify-content: flex-end;
+  height: 40px;
+  max-width: 100%;
+  min-width: 0;
   flex-shrink: 0;
+  overflow: hidden;
+  border-left: var(--line);
+  background: var(--color-surface);
 }
 
 .canvas-tools button {
@@ -1702,7 +1727,7 @@ td {
 @media (max-width: 1279px) {
   body,
   #root {
-    min-width: 1280px;
+    min-width: 0;
   }
 }
 

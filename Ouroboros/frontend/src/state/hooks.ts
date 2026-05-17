@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { ApiError } from "../api/errors";
+import { useEvents } from "./EventBufferContext";
 import { useSession } from "./SessionContext";
 import { useSnapshot } from "./SnapshotContext";
 import { useRealtime } from "./RealtimeContext";
@@ -14,12 +15,15 @@ export interface ControlCommandHook {
   clearError(): void;
 }
 
-// module-level shared lock — prevents concurrent control commands across all useControlCommand instances
-const _activeSessionCommands = new Set<string>();
+// module-level shared lock — prevents duplicate non-stop control commands per session
+const _activeSessionCommands = new Map<string, ControlAction>();
 const TERMINAL_SESSION_STATUSES = new Set(["completed", "failed"]);
 
 export function useControlCommand(action: ControlAction): ControlCommandHook {
   const session = useSession();
+  const snapshot = useSnapshot();
+  const events = useEvents();
+  const realtime = useRealtime();
   const ui = useUI();
   const [inFlight, setInFlight] = useState(false);
   const rest = getRestClient();
@@ -28,10 +32,13 @@ export function useControlCommand(action: ControlAction): ControlCommandHook {
     if (session.phase.kind !== "active") return;
     const sessionId = session.phase.session.session_id;
     const commandKey = sessionId;
-    if (_activeSessionCommands.has(commandKey)) return;
+    const activeCommand = _activeSessionCommands.get(commandKey);
+    if (activeCommand) {
+      if (action !== "stop" || activeCommand === "stop") return;
+    }
     if (TERMINAL_SESSION_STATUSES.has(session.phase.session.status)) return;
 
-    _activeSessionCommands.add(commandKey);
+    _activeSessionCommands.set(commandKey, action);
     setInFlight(true);
     ui.clearControlError(action);
     try {
@@ -49,14 +56,25 @@ export function useControlCommand(action: ControlAction): ControlCommandHook {
       await session.refreshSession();
     } catch (error) {
       const apiError = error as ApiError;
+      if (apiError.code === "SESSION_NOT_FOUND") {
+        realtime.stop("session_not_found");
+        events.reset();
+        snapshot.reset();
+        session.reset(apiError);
+        ui.clearControlErrors();
+        ui.setSelectedAgentId(null);
+        ui.setActiveModule("CONFIG");
+      }
       ui.recordControlError(action, apiError);
       session.recordControlError(apiError);
       throw apiError;
     } finally {
-      _activeSessionCommands.delete(commandKey);
+      if (_activeSessionCommands.get(commandKey) === action) {
+        _activeSessionCommands.delete(commandKey);
+      }
       setInFlight(false);
     }
-  }, [action, rest, session, ui]);
+  }, [action, events, realtime, rest, session, snapshot, ui]);
 
   const clearError = useCallback(() => ui.clearControlError(action), [action, ui]);
 

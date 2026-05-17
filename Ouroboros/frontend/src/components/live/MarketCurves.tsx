@@ -38,19 +38,64 @@ export const MarketCurves = memo(function MarketCurves({ bars, lastPrice }: Mark
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
   const option = useMemo(() => buildOption(bars), [bars]);
+  const optionRef = useRef(option);
+
+  useEffect(() => {
+    optionRef.current = option;
+  }, [option]);
 
   useEffect(() => {
     const host = chartHostRef.current;
     if (!host || bars.length === 0) return;
-    const chart = echarts.init(host, undefined, { renderer: "canvas" });
-    chartRef.current = chart;
-    const resize = () => chart.resize();
-    window.addEventListener("resize", resize);
+    let isActive = true;
+    let resizeFrame: number | null = null;
+
+    const ensureChart = () => {
+      resizeFrame = null;
+      if (!isActive || !host.isConnected || !hasRenderableSize(host)) return;
+
+      let chart = chartRef.current;
+      if (!chart || chart.isDisposed()) {
+        chart = echarts.init(host, undefined, { renderer: "canvas" });
+        chartRef.current = chart;
+      }
+
+      chart.resize({
+        width: host.clientWidth,
+        height: host.clientHeight,
+      });
+      if (!chart.isDisposed()) {
+        chart.setOption(optionRef.current, { notMerge: true, lazyUpdate: true });
+      }
+    };
+
+    const scheduleEnsureChart = () => {
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+      }
+      resizeFrame = window.requestAnimationFrame(ensureChart);
+    };
+
+    scheduleEnsureChart();
+    const resizeObserver = new ResizeObserver(scheduleEnsureChart);
+    resizeObserver.observe(host);
+    window.addEventListener("resize", scheduleEnsureChart);
 
     return () => {
-      window.removeEventListener("resize", resize);
-      chart.dispose();
-      chartRef.current = null;
+      isActive = false;
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = null;
+      }
+      window.removeEventListener("resize", scheduleEnsureChart);
+      resizeObserver.disconnect();
+      const chart = chartRef.current;
+      if (chart && !chart.isDisposed()) {
+        chart.dispose();
+      }
+      if (chartRef.current === chart) {
+        chartRef.current = null;
+      }
     };
   }, [bars.length]);
 
@@ -226,4 +271,9 @@ function makePriceDomain(minValue: number, maxValue: number, fallbackPrice: numb
 
 function safeNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function hasRenderableSize(element: HTMLElement): boolean {
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
 }

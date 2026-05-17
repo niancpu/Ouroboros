@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from Ouroboros.core.agents import AgentRuntime
@@ -73,6 +76,10 @@ from .state_machine import META_ORCHESTRATOR_TICK_SEQUENCE, MetaOrchestratorStat
 
 DEFAULT_AGENT_DEADLINE_MS = 30_000
 DEFAULT_SESSION_PREFIX = "sim"
+GRAPH_LOG_PATH_ENV = "OUROBOROS_GRAPH_LOG_PATH"
+DEFAULT_GRAPH_LOG_PATH = (
+    Path(__file__).resolve().parents[3] / "logs" / "audit_graph_generation.jsonl"
+)
 FRONTEND_SAFE_EVENT_REF_PREFIXES = (
     "audit_graph_",
     "chain_",
@@ -1205,12 +1212,23 @@ class SessionRunner:
                     payload=alert.to_dict(),
                 )
 
-        audit_events = self._enrich_audit_events_with_stigmergy_sources(artifacts)
+        audit_events = [
+            *self._public_input_audit_events(runtime, command, artifacts),
+            *self._enrich_audit_events_with_stigmergy_sources(artifacts),
+        ]
         audit_graph = runtime.ui_audit_officer.publish_audit_graph(
             audit_events,
             event_id=f"audit_graph_{_stable_id(command.tick_id)}",
             tick_id=command.tick_id,
             trace_id=command.trace_id,
+        )
+        _append_graph_generation_log(
+            runtime=runtime,
+            command=command,
+            event_type="audit.graph",
+            event_id=audit_graph.event_id,
+            audit_graph=audit_graph,
+            causal_chain_step_count=0,
         )
         runtime.last_audit_graph = audit_graph
         artifacts.published_event_ids.append(audit_graph.event_id)
@@ -1257,6 +1275,14 @@ class SessionRunner:
             },
             trades=artifacts.trade_batch,
         )
+        _append_graph_generation_log(
+            runtime=runtime,
+            command=command,
+            event_type="audit.causal_chain",
+            event_id=chain.event_id,
+            audit_graph=audit_graph,
+            causal_chain_step_count=len(chain.steps),
+        )
         runtime.recent_causal_chains.append(chain)
         while len(runtime.recent_causal_chains) > 20:
             runtime.recent_causal_chains.pop(0)
@@ -1293,6 +1319,97 @@ class SessionRunner:
             visibility=map_internal_visibility_to_web(event.visibility),
             payload=event.to_dict(),
         )
+
+    def _public_input_audit_events(
+        self,
+        runtime: _SessionRuntime,
+        command: RunTickCommand,
+        artifacts: _TickArtifacts,
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        market_event_id = artifacts.market_event.event_id if artifacts.market_event else None
+        if market_event_id is not None:
+            for agent_id in artifacts.active_agent_ids:
+                events.append(
+                    self._frontend_audit_event(
+                        runtime,
+                        command,
+                        agent_id=agent_id,
+                        event_id=f"audit_market_{_stable_id(agent_id)}_{_stable_id(command.tick_id)}",
+                        evidence_refs=[market_event_id],
+                        source_agent_id=market_event_id,
+                        belief_shift=0.18,
+                        public_reason="公开行情快照进入该智能体本 Tick 可见输入。",
+                    )
+                )
+
+        order_agent_by_id = {
+            order.event_id: order.agent_id for order in artifacts.order_inputs
+        }
+        if artifacts.trade_batch is None:
+            return events
+        for trade in artifacts.trade_batch.trades:
+            buy_agent = order_agent_by_id.get(trade.buy_order_id)
+            sell_agent = order_agent_by_id.get(trade.sell_order_id)
+            if buy_agent is not None:
+                events.append(
+                    self._frontend_audit_event(
+                        runtime,
+                        command,
+                        agent_id=buy_agent,
+                        event_id=f"audit_trade_buy_{_stable_id(trade.event_id)}",
+                        evidence_refs=[trade.event_id],
+                        source_agent_id=sell_agent or "anonymous_order_flow",
+                        belief_shift=0.55,
+                        public_reason="公开成交把买方连接到同一条订单流链路。",
+                    )
+                )
+            if sell_agent is not None:
+                events.append(
+                    self._frontend_audit_event(
+                        runtime,
+                        command,
+                        agent_id=sell_agent,
+                        event_id=f"audit_trade_sell_{_stable_id(trade.event_id)}",
+                        evidence_refs=[trade.event_id],
+                        source_agent_id=buy_agent or "anonymous_order_flow",
+                        belief_shift=0.55,
+                        public_reason="公开成交把卖方连接到同一条订单流链路。",
+                    )
+                )
+        return events
+
+    def _frontend_audit_event(
+        self,
+        runtime: _SessionRuntime,
+        command: RunTickCommand,
+        *,
+        agent_id: str,
+        event_id: str,
+        evidence_refs: list[str],
+        source_agent_id: str,
+        belief_shift: float,
+        public_reason: str,
+    ) -> dict[str, Any]:
+        snapshot = runtime.last_account_snapshots.get(agent_id)
+        spec = runtime.agent_specs[agent_id]
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "event_id": event_id,
+            "tick_id": command.tick_id,
+            "trace_id": command.trace_id,
+            "producer": "meta_orchestrator",
+            "visibility": InternalVisibility.CONTROL_ONLY.value,
+            "agent_id": agent_id,
+            "agent_type": spec.permission_profile.agent_type.value,
+            "belief_score": 0.5,
+            "position_value": snapshot.market_value if snapshot else 0.0,
+            "risk_state": snapshot.risk_state.value if snapshot else "normal",
+            "evidence_refs": evidence_refs,
+            "source_agent_id": source_agent_id,
+            "belief_shift": belief_shift,
+            "public_reason": public_reason,
+        }
 
     def _enrich_audit_events_with_stigmergy_sources(
         self,
@@ -1585,6 +1702,8 @@ async def _run_agent_barrier_async(
     if results is not None:
         for context, result in zip(contexts, results, strict=True):
             if isinstance(result, Exception):
+                if _agent_runtime_raises_llm_errors(agent_runtime):
+                    raise result
                 failed += 1
                 payloads[context.agent_id] = _hold_payload(context)
             else:
@@ -1602,12 +1721,18 @@ async def _run_agent_barrier_async(
         except asyncio.CancelledError:
             timeout += 1
             payloads[context.agent_id] = _hold_payload(context)
-        except Exception:
+        except Exception as exc:
+            if _agent_runtime_raises_llm_errors(agent_runtime):
+                raise exc
             failed += 1
             payloads[context.agent_id] = _hold_payload(context)
         else:
             completed += 1
     return completed, timeout, failed, payloads
+
+
+def _agent_runtime_raises_llm_errors(agent_runtime: AgentRuntime) -> bool:
+    return bool(getattr(agent_runtime, "raises_llm_errors", False))
 
 
 async def _act_agent(agent_runtime: AgentRuntime, context: TickContext) -> AgentPayload:
@@ -1675,6 +1800,47 @@ def _causal_chain_summary(chain: CausalChainEvent) -> dict[str, Any]:
         "summary": chain.summary,
         "last_event_ref": chain.last_event_ref,
     }
+
+
+def _append_graph_generation_log(
+    *,
+    runtime: _SessionRuntime,
+    command: RunTickCommand,
+    event_type: str,
+    event_id: str,
+    audit_graph: AuditGraphEvent,
+    causal_chain_step_count: int,
+) -> None:
+    raw_path = os.environ.get(GRAPH_LOG_PATH_ENV)
+    if raw_path is not None and not raw_path.strip():
+        return
+    path = Path(raw_path) if raw_path is not None else DEFAULT_GRAPH_LOG_PATH
+    edge_summaries = [
+        {
+            "source": edge.source,
+            "target": edge.target,
+            "reason_ref": edge.reason_ref,
+        }
+        for edge in audit_graph.edges
+    ]
+    record = {
+        "record_type": "graph_generation",
+        "created_at": datetime.now(UTC).isoformat(),
+        "session_id": runtime.session_id,
+        "tick_id": command.tick_id,
+        "event_type": event_type,
+        "event_id": event_id,
+        "nodes_count": len(audit_graph.nodes),
+        "edges_count": len(audit_graph.edges),
+        "causal_chain_steps_count": causal_chain_step_count,
+        "edges": edge_summaries,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as log_file:
+            log_file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError:
+        return
 
 
 def _causal_chain_steps(

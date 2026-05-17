@@ -158,11 +158,13 @@ export function Topology({
   const [nodePositionOverrides, setNodePositionOverrides] = useState<Map<string, NodePoint>>(() => new Map());
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const graphNodes: AuditGraphNode[] = graph.nodes.length
-    ? graph.nodes
-    : fallbackNodesFromAgents(agents);
-  const nodes: TopologyNode[] = graphNodes.map((node, index) => {
-    const point = deterministicNodePoint(index, graphNodes.length);
+  const graphNodes: AuditGraphNode[] = useMemo(
+    () => (graph.nodes.length ? [...graph.nodes] : fallbackNodesFromAgents(agents))
+      .sort((a, b) => a.agent_id.localeCompare(b.agent_id)),
+    [agents, graph.nodes],
+  );
+  const nodes: TopologyNode[] = graphNodes.map((node) => {
+    const point = deterministicNodePoint(stableNodeIndex(node.agent_id), graphNodes.length);
     const override = nodePositionOverrides.get(node.agent_id);
     return {
       ...node,
@@ -974,6 +976,14 @@ function normalizeGraphView(view: GraphView): GraphView {
       clampFinite(view.center[1], GRAPH_DEFAULT_CENTER[1]),
     ],
   };
+}
+
+function stableNodeIndex(agentId: string): number {
+  let hash = 0;
+  for (let index = 0; index < agentId.length; index += 1) {
+    hash = (hash * 31 + agentId.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
 
 function edgeCurveness(edge: AuditGraphEdge, index: number): number {

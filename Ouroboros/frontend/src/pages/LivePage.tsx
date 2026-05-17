@@ -141,6 +141,8 @@ export function LivePage() {
   const canStep = sessionStatus === "created" || sessionStatus === "paused";
   const canStop =
     sessionStatus === "created" || sessionStatus === "running" || sessionStatus === "paused";
+  const controlInFlight =
+    startCmd.inFlight || pauseCmd.inFlight || stepCmd.inFlight || stopCmd.inFlight;
 
   const snapshotData: SnapshotData | null =
     snapshot.phase.kind === "ready" ? snapshot.phase.snapshot : null;
@@ -279,13 +281,13 @@ export function LivePage() {
         <span>状态 {isReplay ? "REPLAY TICK" : visual === "recovering" ? "RECOVERING SNAPSHOT" : labelFrom(sessionStatusLabels, sessionStatus)}</span>
         <span>连接 {labelFrom(connectionLabels, connectionLabelFromPhase(realtime.phase))}</span>
         <div className="control-buttons">
-          <IconButton label="开始" onClick={() => { void startCmd.run(); }} disabled={!canStart || startCmd.inFlight}>
+          <IconButton label="开始" onClick={() => { void startCmd.run(); }} disabled={!canStart || controlInFlight}>
             <Play size={14} />
           </IconButton>
-          <IconButton label="暂停" onClick={() => { void pauseCmd.run(); }} disabled={!canPause || pauseCmd.inFlight}>
+          <IconButton label="暂停" onClick={() => { void pauseCmd.run(); }} disabled={!canPause || controlInFlight}>
             <Pause size={14} />
           </IconButton>
-          <IconButton label="单步推进" onClick={() => { void stepCmd.run(); }} disabled={!canStep || stepCmd.inFlight}>
+          <IconButton label="单步推进" onClick={() => { void stepCmd.run(); }} disabled={!canStep || controlInFlight}>
             <StepForward size={14} />
           </IconButton>
           <IconButton label="停止" onClick={() => { void stopCmd.run(); }} disabled={!canStop || stopCmd.inFlight}>

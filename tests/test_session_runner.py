@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from Ouroboros.core.agents import AgentRuntime
 from Ouroboros.core.chronos import InMemoryChronosRepository
 from Ouroboros.core.clearing import ClearingConfig
 from Ouroboros.core.matching import MatchingConfig
 from Ouroboros.core.orchestrator import SessionAgentSpec, SessionRunner
+from Ouroboros.core.orchestrator.session_runner import GRAPH_LOG_PATH_ENV
 from Ouroboros.core.schemas import (
     CreateSessionCommand,
     RestSuccessResponse,
     SCHEMA_VERSION,
+    SchemaValidationError,
     SessionStatus,
 )
 from Ouroboros.core.web_api.control_rest import ControlRestApi, RestHttpRequest
@@ -90,7 +96,12 @@ class SessionRunnerTests(unittest.TestCase):
         audit_nodes = audit_events[-1]["payload"]["nodes"]
         audit_edges = audit_events[-1]["payload"]["edges"]
         self.assertEqual({node["agent_id"] for node in audit_nodes}, {"buyer", "seller"})
-        self.assertEqual(audit_edges, [])
+        self.assertTrue(audit_edges)
+        self.assertTrue(any(edge["reason_ref"].startswith("mkt_") for edge in audit_edges))
+        self.assertTrue(any(edge["reason_ref"].startswith("trade_") for edge in audit_edges))
+        self.assertTrue(
+            any(edge["source"] == "buyer" and edge["target"] == "seller" for edge in audit_edges)
+        )
 
         chain_events = [event for event in events if event["type"] == "audit.causal_chain"]
         self.assertTrue(chain_events)
@@ -105,6 +116,62 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertNotIn("news_runner_future", rendered)
         self.assertNotIn("thought", rendered)
         self.assertNotIn("memory_update", rendered)
+
+    def test_audit_graph_generation_log_is_appended(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = Path(tmp_dir) / "audit_graph_generation.jsonl"
+            with patch.dict(os.environ, {GRAPH_LOG_PATH_ENV: str(log_path)}, clear=False):
+                runner = session_runner()
+                runner.create_session(create_command())
+
+                runner.step_session(
+                    SESSION_ID,
+                    ticks=1,
+                    command_id="cmd_step_graph_log",
+                    trace_id=TRACE,
+                )
+
+            lines = log_path.read_text(encoding="utf-8").splitlines()
+
+        self.assertGreaterEqual(len(lines), 2)
+        records = [json.loads(line) for line in lines]
+        event_types = {record["event_type"] for record in records}
+        self.assertIn("audit.graph", event_types)
+        self.assertIn("audit.causal_chain", event_types)
+        for record in records:
+            self.assertEqual(record["session_id"], SESSION_ID)
+            self.assertEqual(record["tick_id"], TICK)
+            self.assertTrue(record["event_id"])
+            self.assertEqual(record["nodes_count"], 2)
+            self.assertGreater(record["edges_count"], 0)
+            self.assertTrue(record["edges"])
+            self.assertIn("source", record["edges"][0])
+            self.assertIn("target", record["edges"][0])
+            self.assertIn("reason_ref", record["edges"][0])
+        chain_records = [
+            record for record in records if record["event_type"] == "audit.causal_chain"
+        ]
+        self.assertTrue(any(record["causal_chain_steps_count"] > 0 for record in chain_records))
+
+    def test_audit_graph_generation_log_write_failure_does_not_fail_tick(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = Path(tmp_dir) / "missing_parent" / "audit_graph_generation.jsonl"
+            with patch.dict(os.environ, {GRAPH_LOG_PATH_ENV: str(log_path)}, clear=False), patch(
+                "pathlib.Path.mkdir",
+                side_effect=OSError("cannot create log directory"),
+            ):
+                runner = session_runner()
+                runner.create_session(create_command())
+
+                step = runner.step_session(
+                    SESSION_ID,
+                    ticks=1,
+                    command_id="cmd_step_graph_log_failure",
+                    trace_id=TRACE,
+                )
+
+        self.assertEqual(step["status"], "running")
+        self.assertIn("audit_graph_2024_01_02t14_02_00_08_00", step["tick_result"]["published_event_ids"])
 
     def test_final_tick_publishes_end_of_day(self) -> None:
         runner = session_runner()
@@ -196,6 +263,39 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertIn("market.price", pushed_types)
         self.assertIn("audit.graph", pushed_types)
         self.assertEqual([event["seq"] for event in pushed], sorted(event["seq"] for event in pushed))
+
+    def test_strict_llm_agent_failure_fails_tick_and_publishes_system_error(self) -> None:
+        runner = SessionRunner(
+            chronos_repository=chronos_repository(),
+            agent_specs=agent_specs(),
+            agent_runtime=AgentRuntime(
+                llm_gateway=FailingGateway(),
+                allow_prompt_profile_fallback=True,
+                raise_llm_errors=True,
+            ),
+            matching_config=MatchingConfig(lot_size=100),
+            session_id_factory=lambda _command, _sequence: SESSION_ID,
+        )
+        runner.create_session(create_command())
+
+        with self.assertRaisesRegex(Exception, "session runner failed"):
+            runner.step_session(
+                SESSION_ID,
+                ticks=1,
+                command_id="cmd_step_llm_failure",
+                trace_id=TRACE,
+            )
+
+        events = runner.get_frontend_events(
+            SESSION_ID,
+            from_seq=0,
+            limit=500,
+            request_id="req_events_llm_failure",
+            trace_id=TRACE,
+        )["events"]
+        self.assertEqual(runner._sessions[SESSION_ID].status, SessionStatus.FAILED)
+        self.assertTrue(any(event["type"] == "system.error" for event in events))
+        self.assertFalse(any(event["payload"].get("state") == "commit_tick" for event in events))
 
     def test_margin_call_generates_forced_liquidation_order_through_layer3(self) -> None:
         runner = liquidation_session_runner(
@@ -575,6 +675,11 @@ def scripted_actions() -> dict[str, list[dict[str, object]]]:
             }
         ],
     }
+
+
+class FailingGateway:
+    def complete(self, _: object) -> dict[str, object]:
+        raise SchemaValidationError("llm_provider_error")
 
 
 if __name__ == "__main__":

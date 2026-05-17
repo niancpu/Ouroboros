@@ -20,7 +20,7 @@ type Action =
   | { type: "control/error"; error: ApiError }
   | { type: "control/clear" }
   | { type: "terminal"; stop: StopSessionData }
-  | { type: "reset" };
+  | { type: "reset"; error?: ApiError | null };
 
 const INITIAL: SessionPhase = { kind: "none", lastError: null };
 
@@ -62,7 +62,7 @@ function reducer(state: SessionPhase, action: Action): SessionPhase {
         reason: action.stop.completion_reason,
       };
     case "reset":
-      return INITIAL;
+      return { kind: "none", lastError: action.error ?? null };
     default:
       return state;
   }
@@ -76,7 +76,7 @@ export interface SessionContextValue {
   recordControlError(error: ApiError): void;
   clearControlError(): void;
   markTerminal(stop: StopSessionData): void;
-  reset(): void;
+  reset(error?: ApiError | null): void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -140,8 +140,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [phase],
   );
 
-  const reset = useCallback(() => {
-    dispatch({ type: "reset" });
+  const reset = useCallback((error?: ApiError | null) => {
+    dispatch({ type: "reset", error });
   }, []);
 
   const value = useMemo<SessionContextValue>(

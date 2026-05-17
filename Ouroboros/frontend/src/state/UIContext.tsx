@@ -28,6 +28,7 @@ export interface UIContextValue {
   controlErrors: ControlErrorMap;
   recordControlError(action: ControlAction, error: ApiError): void;
   clearControlError(action: ControlAction): void;
+  clearControlErrors(): void;
   globalError: ApiError | null;
   setGlobalError(next: ApiError | null): void;
 }
@@ -48,6 +49,10 @@ export function UIProvider({ children }: { children: ReactNode }) {
     setControlErrors((current) => ({ ...current, [action]: null }));
   }, []);
 
+  const clearControlErrors = useCallback(() => {
+    setControlErrors(EMPTY_CONTROL_ERRORS);
+  }, []);
+
   const value = useMemo<UIContextValue>(
     () => ({
       activeModule,
@@ -57,6 +62,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
       controlErrors,
       recordControlError,
       clearControlError,
+      clearControlErrors,
       globalError,
       setGlobalError,
     }),
@@ -67,6 +73,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
       controlErrors,
       recordControlError,
       clearControlError,
+      clearControlErrors,
       globalError,
     ],
   );

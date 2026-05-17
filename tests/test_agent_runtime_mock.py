@@ -386,6 +386,17 @@ class AgentRuntimeMockTests(unittest.TestCase):
         self.assertEqual(payload.action.action_type, OrderActionType.HOLD)
         self.assertEqual(runtime.last_errors["agent_a"], "payload_parse_error")
 
+    def test_llm_provider_error_raises_when_strict_llm_mode_is_enabled(self) -> None:
+        runtime = AgentRuntime(
+            llm_gateway=FailingGateway(),
+            allow_prompt_profile_fallback=True,
+            raise_llm_errors=True,
+        )
+
+        with self.assertRaisesRegex(SchemaValidationError, "llm_provider_error"):
+            runtime.act(tick_context("agent_a"))
+        self.assertEqual(runtime.last_errors["agent_a"], "llm_provider_error")
+
     def test_llm_json_payload_is_parsed_into_agent_payload(self) -> None:
         runtime = AgentRuntime(
             llm_gateway=PayloadGateway(),
@@ -463,6 +474,11 @@ class MalformedGateway:
                 }
             ]
         }
+
+
+class FailingGateway:
+    def complete(self, _: object) -> dict[str, object]:
+        raise SchemaValidationError("llm_provider_error")
 
 
 class PayloadGateway:

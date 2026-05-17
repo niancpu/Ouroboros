@@ -74,6 +74,15 @@ class MetaOrchestratorStateMachineTests(unittest.TestCase):
             OrderActionType.HOLD,
         )
 
+    def test_run_tick_raises_agent_error_when_strict_llm_mode_is_enabled(self) -> None:
+        machine = MetaOrchestratorStateMachine(
+            agent_runtime=StrictFailingRuntime(),
+            tick_context_provider=lambda _: [tick_context("agent_a")],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "llm_provider_error"):
+            machine.run_tick(run_tick_command())
+
     def test_run_tick_records_control_only_tick_state_events(self) -> None:
         machine = MetaOrchestratorStateMachine(
             tick_context_provider=lambda _: [tick_context("agent_a")]
@@ -188,6 +197,13 @@ class MixedRuntime:
             agent_id=context.agent_id,
             action=AgentAction(action_type=OrderActionType.HOLD),
         )
+
+
+class StrictFailingRuntime:
+    raises_llm_errors = True
+
+    async def act_async(self, context: TickContext) -> AgentPayload:
+        raise RuntimeError("llm_provider_error")
 
 
 def run_tick_command() -> dict[str, object]:

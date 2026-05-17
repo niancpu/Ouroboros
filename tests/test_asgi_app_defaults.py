@@ -88,6 +88,22 @@ class AsgiAppDefaultAgentTests(unittest.TestCase):
         )
         self.assertIn("prompt_mutual_fund_v1", runtime._prompt_profiles)
 
+    def test_llm_runtime_uses_hold_fallback_for_provider_output_failures(self) -> None:
+        valid_config = LLMConfig(
+            api_key="test-api-key",
+            base_url="https://llm.example.test/v1",
+            model="test-model",
+            provider_name="openai_compatible",
+        )
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "Ouroboros.asgi_app.LLMConfig.from_env",
+            return_value=valid_config,
+        ):
+            runner = _create_runner()
+            runtime = runner._agent_runtime_factory()
+
+        self.assertFalse(runtime.raises_llm_errors)
+
     def test_asgi_default_bus_mode_is_in_memory(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             self.assertEqual(_bus_mode_from_env(), "in_memory")
