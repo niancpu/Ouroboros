@@ -1,6 +1,6 @@
 """LLM gateway infrastructure boundary."""
 
 from .config import LLMConfig
-from .gateway import LLMGateway
+from .gateway import LLMConfigurationError, LLMGateway
 
-__all__ = ["LLMConfig", "LLMGateway"]
+__all__ = ["LLMConfig", "LLMConfigurationError", "LLMGateway"]

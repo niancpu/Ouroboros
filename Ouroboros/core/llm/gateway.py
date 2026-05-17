@@ -19,6 +19,10 @@ from Ouroboros.core.schemas import LLMRequest, SCHEMA_VERSION, SchemaValidationE
 from Ouroboros.core.schemas.common import reject_unknown_keys, require_non_empty_str
 
 
+class LLMConfigurationError(RuntimeError):
+    """Raised when a real LLM run is requested without usable provider config."""
+
+
 class LLMGateway:
     """Deterministic gateway for mock LLM completion tests."""
 
@@ -44,6 +48,7 @@ class LLMGateway:
         clock: Callable[[], float] | None = None,
         provider_name: str = "deterministic_mock",
         config: LLMConfig | None = None,
+        require_provider_config: bool = False,
     ) -> None:
         if max_requests < 1:
             raise SchemaValidationError("max_requests must be >= 1")
@@ -56,6 +61,7 @@ class LLMGateway:
         self._provider_name = (
             provider_name if provider_name != "deterministic_mock" else self.config.provider_name
         )
+        self._require_provider_config = require_provider_config
         self._window_started_at = self._clock()
         self._used_in_window = 0
 
@@ -64,6 +70,7 @@ class LLMGateway:
 
         request = self._coerce_request(agent_prompt)
         self._consume_rate_limit()
+        self._ensure_provider_ready()
         if self._should_call_provider():
             return self._complete_openai_compatible(request)
         return self.precheck_structured_output(
@@ -134,6 +141,11 @@ class LLMGateway:
 
         return dict(output)
 
+    def validate_provider_config(self) -> None:
+        """Raise a clear error when strict real-provider config is incomplete."""
+
+        self._ensure_provider_ready()
+
     def _consume_rate_limit(self) -> None:
         now = self._clock()
         if now - self._window_started_at >= self._window_seconds:
@@ -149,6 +161,24 @@ class LLMGateway:
             and bool(self.config.api_key)
             and bool(self.config.base_url)
         )
+
+    def _ensure_provider_ready(self) -> None:
+        if not self._require_provider_config:
+            return
+        if self._provider_name != "openai_compatible":
+            raise LLMConfigurationError(
+                "llm_provider_not_configured: set "
+                "OUROBOROS_LLM_PROVIDER=openai_compatible for llm agent mode"
+            )
+        missing = []
+        if not self.config.api_key:
+            missing.append("OUROBOROS_LLM_API_KEY")
+        if not self.config.base_url:
+            missing.append("OUROBOROS_LLM_BASE_URL")
+        if missing:
+            raise LLMConfigurationError(
+                "llm_provider_not_configured: missing " + ", ".join(missing)
+            )
 
     def _complete_openai_compatible(self, request: LLMRequest) -> dict[str, Any]:
         endpoint = self.config.base_url.rstrip("/") + "/chat/completions"

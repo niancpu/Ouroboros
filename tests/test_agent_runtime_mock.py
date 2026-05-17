@@ -86,6 +86,29 @@ class AgentRuntimeMockTests(unittest.TestCase):
         AgentPayload.from_dict(buy.to_dict())
         AgentPayload.from_dict(sell.to_dict())
 
+    def test_payload_template_default_fills_runtime_identity(self) -> None:
+        runtime = AgentRuntime(
+            default_actions={
+                "agent_a": {
+                    "action": {"action_type": "hold"},
+                    "belief_shift": {
+                        "confidence_delta": 0.2,
+                        "sentiment": "neutral",
+                        "risk_appetite_delta": 0.0,
+                    },
+                    "evidence_refs": ["forum_post_123"],
+                }
+            }
+        )
+
+        payload = runtime.act(tick_context("agent_a"))
+
+        self.assertEqual(payload.agent_id, "agent_a")
+        self.assertEqual(payload.tick_id, "2024-01-02T14:02:00+08:00")
+        self.assertEqual(payload.trace_id, "trace_abc")
+        self.assertIsNotNone(payload.belief_shift)
+        self.assertEqual(payload.evidence_refs, ["forum_post_123"])
+
     def test_scripted_payload_identity_mismatch_becomes_safe_hold(self) -> None:
         runtime = AgentRuntime(
             scripted_actions={

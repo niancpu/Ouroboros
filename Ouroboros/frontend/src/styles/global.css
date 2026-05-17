@@ -752,14 +752,22 @@ h3 {
 
 .topology svg,
 .topology-chart,
-.market-curves svg {
+.market-chart {
   display: block;
   width: 100%;
   flex: 1;
   min-height: 0;
 }
 
+.market-price-readout {
+  margin-left: auto;
+  font-family: var(--font-machine);
+  font-size: var(--text-caption);
+  font-weight: 700;
+}
+
 .topology-canvas {
+  position: relative;
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -810,6 +818,33 @@ h3 {
   user-select: none;
   -webkit-user-select: none;
   pointer-events: none;
+}
+
+.graph-health {
+  color: var(--color-accent);
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: var(--space-2);
+  white-space: nowrap;
+}
+
+.graph-health.muted {
+  color: var(--color-muted);
+}
+
+.topology-empty {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: min(420px, calc(100% - 48px));
+  transform: translate(-50%, -50%);
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .tick-scrubber {

@@ -7,16 +7,18 @@ export interface NodePoint {
 
 export type EdgeFilterMode = "current" | "selected" | "strong";
 
-const DEFAULT_RADIUS_X = 33;
-const DEFAULT_RADIUS_Y = 26;
+const DEFAULT_RADIUS_X = 36;
+const DEFAULT_RADIUS_Y = 28;
 const STRONG_WEIGHT = 0.3;
 const EDGE_HARD_LIMIT = 48;
 
 export function deterministicNodePoint(index: number, total: number): NodePoint {
-  const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(total, 1);
+  const ring = index % 3;
+  const radiusScale = ring === 0 ? 0.55 : ring === 1 ? 0.78 : 1;
+  const angle = -Math.PI / 2 + (index * Math.PI * 2 * 0.61803398875) % (Math.PI * 2);
   return {
-    x: 50 + Math.cos(angle) * DEFAULT_RADIUS_X,
-    y: 50 + Math.sin(angle) * DEFAULT_RADIUS_Y,
+    x: 50 + Math.cos(angle) * DEFAULT_RADIUS_X * radiusScale,
+    y: 50 + Math.sin(angle) * DEFAULT_RADIUS_Y * radiusScale,
   };
 }
 

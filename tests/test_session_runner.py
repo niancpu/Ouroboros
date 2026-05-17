@@ -81,7 +81,9 @@ class SessionRunnerTests(unittest.TestCase):
         audit_events = [event for event in events if event["type"] == "audit.graph"]
         self.assertTrue(audit_events)
         audit_nodes = audit_events[-1]["payload"]["nodes"]
+        audit_edges = audit_events[-1]["payload"]["edges"]
         self.assertEqual({node["agent_id"] for node in audit_nodes}, {"buyer", "seller"})
+        self.assertEqual(audit_edges, [])
 
         rendered = json.dumps(events, ensure_ascii=False, sort_keys=True)
         self.assertNotIn("private buyer alpha", rendered)

@@ -1041,8 +1041,9 @@ class SessionRunner:
                     payload=alert.to_dict(),
                 )
 
+        audit_events = self._enrich_audit_events_with_stigmergy_sources(artifacts)
         audit_graph = runtime.ui_audit_officer.publish_audit_graph(
-            artifacts.ui_audit_events,
+            audit_events,
             event_id=f"audit_graph_{_stable_id(command.tick_id)}",
             tick_id=command.tick_id,
             trace_id=command.trace_id,
@@ -1057,6 +1058,41 @@ class SessionRunner:
             visibility=map_internal_visibility_to_web(audit_graph.visibility),
             payload=audit_graph.to_dict(),
         )
+
+    def _enrich_audit_events_with_stigmergy_sources(
+        self,
+        artifacts: _TickArtifacts,
+    ) -> list[dict[str, Any]]:
+        forum_author_by_ref: dict[str, str] = {}
+        for forum in artifacts.forum_events:
+            forum_author_by_ref[forum.post_id] = forum.author_agent_id
+            forum_author_by_ref[forum.event_id] = forum.author_agent_id
+
+        market_source = _dominant_market_source(artifacts)
+        market_refs = set()
+        if artifacts.market_event is not None:
+            market_refs.add(artifacts.market_event.event_id)
+        market_refs.update(alert.event_id for alert in artifacts.tape_alerts)
+
+        enriched_events: list[dict[str, Any]] = []
+        for raw in artifacts.ui_audit_events:
+            event = dict(raw)
+            refs = [ref for ref in event.get("evidence_refs", []) if isinstance(ref, str)]
+            source_id = event.get("source_agent_id")
+
+            if not source_id:
+                forum_source = next(
+                    (forum_author_by_ref[ref] for ref in refs if ref in forum_author_by_ref),
+                    None,
+                )
+                if forum_source and forum_source != event.get("agent_id"):
+                    event["source_agent_id"] = forum_source
+                    event["public_reason"] = "公开股吧消息影响该 Agent 的信念或交易倾向。"
+                elif market_source and market_source != event.get("agent_id") and _refs_market_medium(refs, market_refs):
+                    event["source_agent_id"] = market_source
+                    event["public_reason"] = "价格与订单簿变化影响该 Agent 的信念或风险暴露。"
+            enriched_events.append(event)
+        return enriched_events
 
     def _publish_runtime_tick_state(
         self,
@@ -1386,6 +1422,24 @@ def _parse_interval(value: str) -> timedelta:
 
 def _frontend_safe_refs(refs: Iterable[str]) -> list[str]:
     return [ref for ref in refs if ref.startswith(FRONTEND_SAFE_EVENT_REF_PREFIXES)]
+
+
+def _refs_market_medium(refs: Iterable[str], market_refs: set[str]) -> bool:
+    for ref in refs:
+        if ref in market_refs or ref.startswith(("mkt_", "tape_")):
+            return True
+    return False
+
+
+def _dominant_market_source(artifacts: _TickArtifacts) -> str | None:
+    quantities: dict[str, int] = {}
+    for order in artifacts.order_inputs:
+        if order.side.value not in {"buy", "sell"}:
+            continue
+        quantities[order.agent_id] = quantities.get(order.agent_id, 0) + order.quantity
+    if not quantities:
+        return None
+    return max(sorted(quantities), key=lambda agent_id: quantities[agent_id])
 
 
 def _position_value(

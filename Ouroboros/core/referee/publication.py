@@ -218,13 +218,14 @@ def build_audit_graph(
             "position_value": require_number(event.get("position_value", 0.0), "position_value"),
             "risk_state": require_non_empty_str(event.get("risk_state", "normal"), "risk_state"),
         }
+        edge_weight = _audit_edge_weight(event.get("belief_shift", 0.0))
         for idx, ref in enumerate(_string_list(event.get("evidence_refs", []), "evidence_refs")):
             _assert_allowed_event_ref(ref)
             edges.append(
                 {
                     "source": require_non_empty_str(event.get("source_agent_id", "public_event"), "source"),
                     "target": agent_id,
-                    "weight": require_number(event.get("belief_shift", 0.0), "belief_shift"),
+                    "weight": edge_weight,
                     "reason_ref": ref,
                     "public_reason": str(event.get("public_reason") or "公开事件影响审计节点。"),
                 }
@@ -508,6 +509,16 @@ def _string_list(value: Any, field_name: str) -> list[str]:
     if not isinstance(value, list):
         raise SchemaValidationError(f"{field_name} must be a list")
     return [require_non_empty_str(item, f"{field_name}[]") for item in value]
+
+
+def _audit_edge_weight(value: Any) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, Mapping):
+        confidence = abs(require_number(value.get("confidence_delta", 0.0), "belief_shift.confidence_delta"))
+        risk = abs(require_number(value.get("risk_appetite_delta", 0.0), "belief_shift.risk_appetite_delta"))
+        return max(0.05, min(1.0, confidence + risk * 0.5))
+    return abs(require_number(value, "belief_shift"))
 
 
 def _assert_allowed_event_ref(event_ref: str) -> None:

@@ -144,7 +144,12 @@ class AgentRuntime:
         if not isinstance(spec, Mapping):
             raise SchemaValidationError("action spec must be a mapping or schema object")
         if "action" in spec:
-            return AgentPayload.from_dict(spec)
+            data = dict(spec)
+            data.setdefault("schema_version", SCHEMA_VERSION)
+            data.setdefault("tick_id", context.tick_id)
+            data.setdefault("trace_id", context.trace_id)
+            data.setdefault("agent_id", context.agent_id)
+            return AgentPayload.from_dict(data)
         return self._payload_from_action(context, AgentAction.from_dict(spec))
 
     def _payload_from_llm(self, context: TickContext) -> AgentPayload:

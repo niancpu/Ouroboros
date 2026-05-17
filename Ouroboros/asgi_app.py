@@ -8,7 +8,8 @@ runtime behavior in core code.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+import os
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,8 +18,11 @@ from fastapi.responses import JSONResponse
 
 from Ouroboros.core.agents import AgentRuntime
 from Ouroboros.core.chronos import InMemoryChronosRepository
+from Ouroboros.core.llm import LLMConfig, LLMGateway
 from Ouroboros.core.orchestrator import SessionAgentSpec, SessionRunner
 from Ouroboros.core.schemas import SCHEMA_VERSION
+from Ouroboros.core.schemas.common import SchemaValidationError
+from Ouroboros.core.schemas.common import OrderActionType, Sentiment
 from Ouroboros.core.web_api.control_rest import ControlRestApi, RestHttpRequest
 from Ouroboros.core.web_api.realtime_ws import FrontendRealtimeGateway, FrontendWsMessage
 
@@ -128,6 +132,10 @@ _DEFAULT_AGENT_TEMPLATES: tuple[_DefaultAgentTemplate, ...] = (
         )
     ),
 )
+_AGENT_MODE_ENV = "OUROBOROS_AGENT_MODE"
+_AGENT_MODE_LLM = "llm"
+_AGENT_MODE_MOCK_HOLD = "mock_hold"
+_AGENT_MODES = frozenset({_AGENT_MODE_LLM, _AGENT_MODE_MOCK_HOLD})
 
 
 def _default_agent_specs() -> list[SessionAgentSpec]:
@@ -182,6 +190,7 @@ def _official_news_scope(agent_type: str) -> list[str]:
 
 
 def _create_runner() -> SessionRunner:
+    agent_mode = _agent_mode_from_env()
     return SessionRunner(
         chronos_repository=InMemoryChronosRepository.from_dicts(
             initial_market_seeds={
@@ -200,13 +209,63 @@ def _create_runner() -> SessionRunner:
             },
         ),
         agent_profile_sets={"default_24": _default_agent_specs()},
-        agent_runtime=AgentRuntime(
+        agent_runtime_factory=_agent_runtime_factory(agent_mode),
+    )
+
+
+def _agent_mode_from_env(environ: Mapping[str, str] | None = None) -> str:
+    source = environ if environ is not None else os.environ
+    mode = source.get(_AGENT_MODE_ENV, _AGENT_MODE_LLM).strip().lower() or _AGENT_MODE_LLM
+    if mode not in _AGENT_MODES:
+        allowed = ", ".join(sorted(_AGENT_MODES))
+        raise SchemaValidationError(f"{_AGENT_MODE_ENV} must be one of: {allowed}")
+    return mode
+
+
+def _agent_runtime_factory(agent_mode: str) -> Callable[[], AgentRuntime]:
+    if agent_mode == _AGENT_MODE_MOCK_HOLD:
+        return lambda: AgentRuntime(
             default_actions={
-                template.agent_id: {"action_type": "hold"}
+                template.agent_id: _default_action(template)
                 for template in _DEFAULT_AGENT_TEMPLATES
             }
-        ),
+        )
+    if agent_mode == _AGENT_MODE_LLM:
+        return _create_llm_agent_runtime
+    raise SchemaValidationError(f"unsupported agent mode: {agent_mode}")
+
+
+def _create_llm_agent_runtime() -> AgentRuntime:
+    gateway = LLMGateway(
+        config=LLMConfig.from_env(),
+        require_provider_config=True,
     )
+    gateway.validate_provider_config()
+    return AgentRuntime(llm_gateway=gateway)
+
+
+def _default_action(template: _DefaultAgentTemplate) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "agent_id": template.agent_id,
+        "action": {
+            "action_type": OrderActionType.HOLD.value,
+        },
+        "belief_shift": {
+            "confidence_delta": 0.0,
+            "sentiment": Sentiment.NEUTRAL.value,
+            "risk_appetite_delta": 0.0,
+        },
+        "evidence_refs": [_default_evidence_ref(template)],
+    }
+
+
+def _default_evidence_ref(template: _DefaultAgentTemplate) -> str:
+    if template.agent_type == "retail":
+        return "forum_post_default_signal"
+    if template.agent_type == "national_team":
+        return "tape_default_stabilizer"
+    return "mkt_default_opening_signal"
 
 
 _runner = _create_runner()

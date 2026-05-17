@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from Ouroboros.core import llm as llm_module
-from Ouroboros.core.llm import LLMGateway
+from Ouroboros.core.llm import LLMConfigurationError, LLMGateway
 from Ouroboros.core.schemas import LLMRequest, SchemaValidationError
 
 
@@ -100,6 +100,26 @@ class LLMGatewayTests(unittest.TestCase):
         content = json.loads(candidate["content"])
         self.assertEqual(content["action"]["action_type"], "hold")
         self.assertEqual(content["agent_id"], "agent_a")
+
+    def test_strict_provider_config_rejects_unconfigured_mock_provider(self) -> None:
+        config_type = self._llm_config_type()
+        gateway = LLMGateway(
+            config=config_type(provider_name="deterministic_mock"),
+            require_provider_config=True,
+        )
+
+        with self.assertRaisesRegex(LLMConfigurationError, "OUROBOROS_LLM_PROVIDER"):
+            gateway.complete(LLMRequest.from_dict(llm_request()))
+
+    def test_strict_provider_config_rejects_missing_connection_fields(self) -> None:
+        config_type = self._llm_config_type()
+        gateway = LLMGateway(
+            config=config_type(provider_name="openai_compatible"),
+            require_provider_config=True,
+        )
+
+        with self.assertRaisesRegex(LLMConfigurationError, "OUROBOROS_LLM_API_KEY"):
+            gateway.complete(LLMRequest.from_dict(llm_request()))
 
     def test_complete_accepts_explicit_llm_config_without_leaking_secrets(self) -> None:
         config_type = self._llm_config_type()

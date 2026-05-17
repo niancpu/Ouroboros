@@ -130,28 +130,38 @@ export interface OHLCVBar {
 export function deriveOHLCV(
   events: ReadonlyArray<ServerEventEnvelope>,
 ): OHLCVBar[] {
-  // Group market.price events by tick_id
-  const byTick = new Map<string, { prices: number[]; volumes: number[] }>();
+  const byTick = new Map<string, { price: number; volume: number | null; seq: number }>();
   for (const evt of events) {
     if (evt.type !== "market.price") continue;
     const p = evt.payload as { last_price?: unknown; volume?: unknown };
     if (typeof p.last_price !== "number") continue;
-    const bucket = byTick.get(evt.tick_id) ?? { prices: [], volumes: [] };
-    bucket.prices.push(p.last_price);
-    if (typeof p.volume === "number") bucket.volumes.push(p.volume);
-    byTick.set(evt.tick_id, bucket);
+    const existing = byTick.get(evt.tick_id);
+    if (existing && existing.seq > evt.seq) continue;
+    byTick.set(evt.tick_id, {
+      price: p.last_price,
+      volume: typeof p.volume === "number" ? p.volume : null,
+      seq: evt.seq,
+    });
   }
-  const bars: OHLCVBar[] = [];
-  for (const [tick_id, { prices, volumes }] of byTick) {
-    if (prices.length === 0) continue;
-    const open = prices[0];
-    const close = prices[prices.length - 1];
-    const high = Math.max(...prices);
-    const low = Math.min(...prices);
-    const volume = volumes.length > 0 ? volumes[volumes.length - 1] : 0;
-    bars.push({ tick_id, open, high, low, close, volume, is_up: close >= open });
-  }
-  // Sort by tick_id (string sort works for tick IDs like "T001", "T002")
-  bars.sort((a, b) => a.tick_id.localeCompare(b.tick_id));
-  return bars.slice(-24); // keep last 24 candles max
+  const snapshots = Array.from(byTick, ([tick_id, value]) => ({ tick_id, ...value })).sort((a, b) =>
+    a.seq === b.seq ? a.tick_id.localeCompare(b.tick_id) : a.seq - b.seq,
+  );
+
+  const bars = snapshots.map((snapshot, index) => {
+    const previous = snapshots[index - 1];
+    const open = previous?.price ?? snapshot.price;
+    const close = snapshot.price;
+    const high = Math.max(open, close);
+    const low = Math.min(open, close);
+    const volume =
+      snapshot.volume === null
+        ? 0
+        : previous?.volume === null || previous?.volume === undefined
+          ? snapshot.volume
+          : Math.max(snapshot.volume - previous.volume, 0);
+
+    return { tick_id: snapshot.tick_id, open, high, low, close, volume, is_up: close >= open };
+  });
+
+  return bars.slice(-24);
 }

@@ -191,6 +191,33 @@ class RefereePublicationTests(unittest.TestCase):
             {"End_of_Day": [], "Market_Price": [], "Tape_Alerts": []},
         )
 
+    def test_audit_graph_accepts_structured_belief_shift_without_private_leakage(self) -> None:
+        officer = UIAuditOfficer()
+        raw = {
+            **ui_audit(),
+            "belief_shift": {
+                "confidence_delta": 0.3,
+                "sentiment": "bullish",
+                "risk_appetite_delta": 0.2,
+            },
+        }
+
+        graph = officer.build_audit_graph(
+            [raw],
+            event_id="audit_graph_001",
+            tick_id=TICK,
+            trace_id=TRACE,
+        )
+        data = graph.to_dict()
+
+        self.assertEqual(data["nodes"][0]["agent_id"], "retail_b")
+        self.assertEqual(data["edges"][0]["source"], "public_event")
+        self.assertEqual(data["edges"][0]["target"], "retail_b")
+        self.assertGreater(data["edges"][0]["weight"], 0.3)
+        rendered = repr(data)
+        self.assertNotIn("thought", rendered)
+        self.assertNotIn("private alpha", rendered)
+
     def test_exchange_broadcaster_publishes_only_agent_subscribable_public_channels(self) -> None:
         router = ChannelRouter(session_id="sim_001")
         router.register_agent_permissions(agent_profile("retail_b"))

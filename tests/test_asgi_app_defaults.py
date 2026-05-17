@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import unittest
 from collections import Counter
+from unittest.mock import patch
 
 from Ouroboros.asgi_app import _create_runner, _default_agent_specs
+from Ouroboros.core.llm import LLMConfig, LLMConfigurationError
 
 
 class AsgiAppDefaultAgentTests(unittest.TestCase):
@@ -22,15 +24,46 @@ class AsgiAppDefaultAgentTests(unittest.TestCase):
             },
         )
 
-    def test_default_runner_hold_actions_cover_all_default_agents(self) -> None:
+    def test_default_runner_does_not_inject_default_agent_actions(self) -> None:
         specs = _default_agent_specs()
-        runner = _create_runner()
+        valid_config = LLMConfig(
+            api_key="test-api-key",
+            base_url="https://llm.example.test/v1",
+            model="test-model",
+            provider_name="openai_compatible",
+        )
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "Ouroboros.asgi_app.LLMConfig.from_env",
+            return_value=valid_config,
+        ):
+            runner = _create_runner()
+            runtime = runner._agent_runtime_factory()
+
+        self.assertEqual(specs[0].agent_id, "mutual_fund_a")
+        self.assertEqual(runtime._default_actions, {})
+
+    def test_default_llm_mode_rejects_missing_provider_config(self) -> None:
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "Ouroboros.asgi_app.LLMConfig.from_env",
+            return_value=LLMConfig(provider_name="deterministic_mock"),
+        ):
+            runner = _create_runner()
+            with self.assertRaisesRegex(LLMConfigurationError, "OUROBOROS_LLM_PROVIDER"):
+                runner._agent_runtime_factory()
+
+    def test_mock_hold_mode_actions_cover_all_default_agents(self) -> None:
+        specs = _default_agent_specs()
+        with patch.dict("os.environ", {"OUROBOROS_AGENT_MODE": "mock_hold"}, clear=True):
+            runner = _create_runner()
         runtime = runner._agent_runtime_factory()
 
-        self.assertEqual(
-            runtime._default_actions,
-            {spec.agent_id: {"action_type": "hold"} for spec in specs},
-        )
+        self.assertEqual(set(runtime._default_actions), {spec.agent_id for spec in specs})
+        for spec in specs:
+            action = runtime._default_actions[spec.agent_id]
+            with self.subTest(agent_id=spec.agent_id):
+                self.assertEqual(action["action"]["action_type"], "hold")
+                self.assertIn("belief_shift", action)
+                self.assertTrue(action["evidence_refs"])
 
     def test_default_agent_permissions_follow_identity_matrix(self) -> None:
         specs = _default_agent_specs()
