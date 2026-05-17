@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -87,9 +88,9 @@ from .session_utils import (
 DEFAULT_AGENT_DEADLINE_MS = 30_000
 DEFAULT_SESSION_PREFIX = "sim"
 GRAPH_LOG_PATH_ENV = "OUROBOROS_GRAPH_LOG_PATH"
-DEFAULT_GRAPH_LOG_PATH = (
-    Path(__file__).resolve().parents[3] / "logs" / "audit_graph_generation.jsonl"
-)
+DEFAULT_GRAPH_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+DEFAULT_GRAPH_LOG_BASENAME = "audit_graph_generation"
+GRAPH_LOG_FILE_SUFFIX = ".jsonl"
 FRONTEND_SAFE_EVENT_REF_PREFIXES = (
     "audit_graph_",
     "chain_",
@@ -182,6 +183,7 @@ class _SessionRuntime:
     frontend_events: list[WebEventEnvelope] = field(default_factory=list)
     next_frontend_seq: int = 1
     continuous_worker: threading.Thread | None = None
+    graph_generation_log_path: Path | None = None
 
     @property
     def session_id(self) -> str:
@@ -342,6 +344,10 @@ class SessionRunner:
             lifecycle_states={
                 agent_id: LifecycleState.ACTIVE for agent_id in agent_specs
             },
+            graph_generation_log_path=_graph_generation_log_path(
+                session_id=session_id,
+                sequence=self._session_sequence,
+            ),
         )
         self._sessions[session_id] = runtime
         return result
@@ -1730,10 +1736,9 @@ def _append_graph_generation_log(
     audit_graph: AuditGraphEvent,
     causal_chain_step_count: int,
 ) -> None:
-    raw_path = os.environ.get(GRAPH_LOG_PATH_ENV)
-    if raw_path is not None and not raw_path.strip():
+    path = runtime.graph_generation_log_path
+    if path is None:
         return
-    path = Path(raw_path) if raw_path is not None else DEFAULT_GRAPH_LOG_PATH
     edge_summaries = [
         {
             "source": edge.source,
@@ -1760,6 +1765,39 @@ def _append_graph_generation_log(
             log_file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
     except OSError:
         return
+
+
+def _graph_generation_log_path(*, session_id: str, sequence: int) -> Path | None:
+    raw_path = os.environ.get(GRAPH_LOG_PATH_ENV)
+    if raw_path is not None:
+        raw_path = raw_path.strip()
+        if not raw_path:
+            return None
+        configured_path = Path(raw_path)
+        if configured_path.suffix:
+            return configured_path
+        return configured_path / _graph_generation_log_filename(
+            session_id=session_id,
+            sequence=sequence,
+        )
+    return DEFAULT_GRAPH_LOG_DIR / _graph_generation_log_filename(
+        session_id=session_id,
+        sequence=sequence,
+    )
+
+
+def _graph_generation_log_filename(*, session_id: str, sequence: int) -> str:
+    created_at = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    safe_session_id = _safe_log_path_part(session_id) or "session"
+    return (
+        f"{DEFAULT_GRAPH_LOG_BASENAME}_{created_at}_"
+        f"{sequence:04d}_{safe_session_id}{GRAPH_LOG_FILE_SUFFIX}"
+    )
+
+
+def _safe_log_path_part(value: str) -> str:
+    safe_value = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._-")
+    return safe_value[:80]
 
 
 def _causal_chain_steps(

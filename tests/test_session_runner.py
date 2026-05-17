@@ -161,6 +161,54 @@ class SessionRunnerTests(unittest.TestCase):
         ]
         self.assertTrue(any(record["causal_chain_steps_count"] > 0 for record in chain_records))
 
+    def test_audit_graph_generation_log_uses_one_file_per_session_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_dir = Path(tmp_dir) / "graph_logs"
+            runner = SessionRunner(
+                chronos_repository=chronos_repository(),
+                agent_specs=agent_specs(),
+                agent_runtime_factory=lambda: AgentRuntime(
+                    scripted_actions=scripted_actions()
+                ),
+                matching_config=MatchingConfig(lot_size=100),
+                session_id_factory=lambda _command, sequence: f"{SESSION_ID}_{sequence}",
+            )
+            with patch.dict(os.environ, {GRAPH_LOG_PATH_ENV: str(log_dir)}, clear=False):
+                first_session = runner.create_session(create_command()).session_id
+                second_session = runner.create_session(create_command()).session_id
+
+                runner.step_session(
+                    first_session,
+                    ticks=1,
+                    command_id="cmd_step_graph_log_first",
+                    trace_id=TRACE,
+                )
+                runner.step_session(
+                    second_session,
+                    ticks=1,
+                    command_id="cmd_step_graph_log_second",
+                    trace_id=TRACE,
+                )
+
+            log_paths = sorted(log_dir.glob("audit_graph_generation_*.jsonl"))
+            self.assertEqual(len(log_paths), 2)
+            self.assertTrue(all(path.name.endswith(".jsonl") for path in log_paths))
+            self.assertTrue(any(f"{SESSION_ID}_1" in path.name for path in log_paths))
+            self.assertTrue(any(f"{SESSION_ID}_2" in path.name for path in log_paths))
+            records_by_file = [
+                [
+                    json.loads(line)
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                ]
+                for path in log_paths
+            ]
+
+        self.assertTrue(all(len(records) >= 2 for records in records_by_file))
+        self.assertEqual(
+            {records[0]["session_id"] for records in records_by_file},
+            {f"{SESSION_ID}_1", f"{SESSION_ID}_2"},
+        )
+
     def test_market_only_tick_still_generates_frontend_renderable_graph_edges(self) -> None:
         runner = market_only_session_runner()
         runner.create_session(create_command())
