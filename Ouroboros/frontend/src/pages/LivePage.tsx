@@ -125,7 +125,7 @@ export function LivePage() {
   const latestMarket = useMemo(() => {
     const event = pickLatestMarketPrice(marketEvents);
     if (event) return event.payload as MarketSnapshot;
-    if (snapshotData) return snapshotData.market;
+    if (snapshotData?.market) return snapshotData.market;
     return EMPTY_MARKET;
   }, [marketEvents, snapshotData]);
 

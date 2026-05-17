@@ -38,7 +38,7 @@ export function DossierPage() {
   const sessionId = session.phase.kind === "active" || session.phase.kind === "terminal"
     ? session.phase.session.session_id
     : null;
-  const symbol = snapshotData?.market.symbol ?? "demo_stock";
+  const symbol = snapshotData?.market?.symbol ?? "demo_stock";
   const currentTickId = session.phase.kind === "active" || session.phase.kind === "terminal"
     ? session.phase.session.current_tick_id
     : "";

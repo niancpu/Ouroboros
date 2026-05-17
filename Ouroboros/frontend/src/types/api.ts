@@ -133,7 +133,7 @@ export interface SnapshotData {
   last_seq: number;
   current_tick_id: string;
   tick_state: TickState;
-  market: MarketSnapshot;
+  market: MarketSnapshot | null;
   agents: AgentSummary[];
   audit_graph: AuditGraphPayload;
   causal_chains: CausalChainSummary[];
