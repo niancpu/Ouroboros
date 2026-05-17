@@ -3,6 +3,7 @@ import type {
   AuditCausalChainPayload,
   AuditGraphPayload,
   LifecycleState,
+  MarketSnapshot,
   RuntimeAgentLifecyclePayload,
   ServerEventEnvelope,
   SnapshotData,
@@ -119,6 +120,7 @@ export function pickLatestMarketPrice(
 
 export interface OHLCVBar {
   tick_id: string;
+  seq?: number;
   open: number;
   high: number;
   low: number;
@@ -127,25 +129,45 @@ export interface OHLCVBar {
   is_up: boolean; // close >= open
 }
 
+export interface OHLCVSnapshotSeed {
+  tick_id: string;
+  seq: number;
+  market: MarketSnapshot;
+}
+
 export function deriveOHLCV(
   events: ReadonlyArray<ServerEventEnvelope>,
+  snapshotSeed?: OHLCVSnapshotSeed | null,
 ): OHLCVBar[] {
-  const byTick = new Map<string, { price: number; volume: number | null; seq: number }>();
+  const snapshots: Array<{ tick_id: string; price: number; volume: number | null; seq: number }> = [];
+  const seenSeq = new Set<number>();
   for (const evt of events) {
     if (evt.type !== "market.price") continue;
     const p = evt.payload as { last_price?: unknown; volume?: unknown };
     if (typeof p.last_price !== "number") continue;
-    const existing = byTick.get(evt.tick_id);
-    if (existing && existing.seq > evt.seq) continue;
-    byTick.set(evt.tick_id, {
+    if (seenSeq.has(evt.seq)) continue;
+    seenSeq.add(evt.seq);
+    snapshots.push({
+      tick_id: evt.tick_id,
       price: p.last_price,
       volume: typeof p.volume === "number" ? p.volume : null,
       seq: evt.seq,
     });
   }
-  const snapshots = Array.from(byTick, ([tick_id, value]) => ({ tick_id, ...value })).sort((a, b) =>
-    a.seq === b.seq ? a.tick_id.localeCompare(b.tick_id) : a.seq - b.seq,
-  );
+  if (
+    snapshotSeed &&
+    typeof snapshotSeed.market.last_price === "number" &&
+    Number.isFinite(snapshotSeed.market.last_price) &&
+    !seenSeq.has(snapshotSeed.seq)
+  ) {
+    snapshots.push({
+      tick_id: snapshotSeed.tick_id,
+      price: snapshotSeed.market.last_price,
+      volume: typeof snapshotSeed.market.volume === "number" ? snapshotSeed.market.volume : null,
+      seq: snapshotSeed.seq,
+    });
+  }
+  snapshots.sort((a, b) => a.seq - b.seq);
 
   const bars = snapshots.map((snapshot, index) => {
     const previous = snapshots[index - 1];
@@ -160,7 +182,7 @@ export function deriveOHLCV(
           ? snapshot.volume
           : Math.max(snapshot.volume - previous.volume, 0);
 
-    return { tick_id: snapshot.tick_id, open, high, low, close, volume, is_up: close >= open };
+    return { tick_id: snapshot.tick_id, seq: snapshot.seq, open, high, low, close, volume, is_up: close >= open };
   });
 
   return bars.slice(-24);

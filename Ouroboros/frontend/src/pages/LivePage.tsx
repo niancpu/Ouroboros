@@ -176,7 +176,20 @@ export function LivePage() {
     () => events.events.filter((e) => e.type === "market.price"),
     [events.events],
   );
-  const ohlcv = useMemo(() => deriveOHLCV(marketEvents), [marketEvents]);
+  const ohlcv = useMemo(
+    () =>
+      deriveOHLCV(
+        marketEvents,
+        snapshotData?.market
+          ? {
+              tick_id: snapshotData.current_tick_id,
+              seq: snapshotData.last_seq,
+              market: snapshotData.market,
+            }
+          : null,
+      ),
+    [marketEvents, snapshotData],
+  );
   const latestMarket = useMemo(() => {
     const event = pickLatestMarketPrice(marketEvents);
     if (event) return event.payload as MarketSnapshot;

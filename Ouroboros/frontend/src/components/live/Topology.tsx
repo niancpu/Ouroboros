@@ -24,6 +24,7 @@ import type {
 import { agentTypeLabels, labelFrom, riskStateLabels } from "../../i18n/labels";
 import { displayAgentName, formatPercent, formatTick } from "../../utils/format";
 import {
+  agentOnlyGraphEdges,
   buildSpotlightIds,
   deterministicNodePoint,
   positionExposure,
@@ -36,7 +37,7 @@ echarts.use([GraphChart, TooltipComponent, CanvasRenderer]);
 
 type ChartInstance = ReturnType<typeof echarts.init>;
 type OverlayGroup = InstanceType<typeof echarts.graphic.Group>;
-type VisualNodeKind = "agent" | "source";
+type VisualNodeKind = "agent";
 
 interface TopologyProps {
   agents: AgentSummary[];
@@ -75,7 +76,6 @@ const LABEL_MIN_ZOOM_SCALE = 0.85;
 const LABEL_BASE_FONT_SIZE = 11;
 const LABEL_VIEWPORT_MARGIN = 24;
 const NODE_DRAG_MIN_DISTANCE = 3;
-const SOURCE_NODE_SYMBOL_SIZE = 14;
 
 const C = {
   accent: "#0037c8",
@@ -174,11 +174,15 @@ export function Topology({
       ...(override ?? point),
     };
   });
-  const visibleEdges = pruneGraphEdges(graph.edges, selectedAgentId, edgeMode);
-  const spotlightIds = buildSpotlightIds(hoveredAgentId, graph.edges);
+  const agentEdges = useMemo(
+    () => agentOnlyGraphEdges(graph.edges, graphNodes),
+    [graph.edges, graphNodes],
+  );
+  const visibleEdges = pruneGraphEdges(agentEdges, selectedAgentId, edgeMode);
+  const spotlightIds = buildSpotlightIds(hoveredAgentId, agentEdges);
   const visualNodes = useMemo(
-    () => buildVisualNodes(nodes, visibleEdges, nodePositionOverrides),
-    [nodes, nodePositionOverrides, visibleEdges],
+    () => buildVisualNodes(nodes),
+    [nodes],
   );
   const visualNodeById = useMemo(
     () => new Map(visualNodes.map((node) => [node.id, node])),
@@ -186,26 +190,6 @@ export function Topology({
   );
   const option = useMemo(() => {
     const chartNodes: ChartNodeDatum[] = visualNodes.map((visualNode) => {
-      if (visualNode.kind === "source") {
-        return {
-          id: visualNode.id,
-          name: sourceLabel(visualNode.id),
-          nodeKind: "source",
-          x: visualNode.x,
-          y: visualNode.y,
-          value: 0,
-          sanitizedTooltip: `${sourceLabel(visualNode.id)} / 公开来源`,
-          symbol: "diamond",
-          symbolSize: 14,
-          itemStyle: {
-            color: "#efefef",
-            borderColor: C.secondary,
-            borderWidth: 1.3,
-            opacity: 0.94,
-          },
-        };
-      }
-
       const node = visualNode.node;
       const visual = agentTypeVisual(node.agent_type);
       const lifecycleState = agentLifecycleMap.get(node.agent_id);
@@ -347,7 +331,6 @@ export function Topology({
     const labelScale = overlayLabelScale(graphView.zoom);
     const labelFont = overlayLabelFont(LABEL_BASE_FONT_SIZE, labelScale);
     const overlayStrokeWidth = overlayLineWidth(labelScale);
-    const sourceOffset = 12 * labelScale;
     const agentNameOffset = 13 * labelScale;
     const overlay = new echarts.graphic.Group({ silent: true });
     overlay.add(new echarts.graphic.Text({
@@ -369,23 +352,6 @@ export function Topology({
       const [x, y] = pixel;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
       if (!isLabelAnchorVisible(x, y, width, height)) return;
-
-      if (visualNode.kind === "source") {
-        const labelRight = x < width - 96 * labelScale;
-        overlay.add(new echarts.graphic.Text({
-          silent: true,
-          x: labelRight ? x + sourceOffset : x - sourceOffset,
-          y,
-          style: {
-            text: sourceLabel(visualNode.id),
-            fill: C.secondary,
-            font: labelFont,
-            align: labelRight ? "left" : "right",
-            verticalAlign: "middle",
-          },
-        }));
-        return;
-      }
 
       const node = visualNode.node;
       const isSelected = node.agent_id === latestSelectedAgentIdRef.current;
@@ -488,12 +454,6 @@ export function Topology({
     };
   }, [scheduleGraphicOverlay]);
 
-  const syncGraphViewFromChart = useCallback((chart: ChartInstance) => {
-    const nextView = readGraphView(chart);
-    if (!nextView) return;
-    setGraphViewState(nextView, graphViewRef, setGraphView);
-  }, []);
-
   const deferUiCallback = useCallback((callback: () => void) => {
     const timer = window.setTimeout(() => {
       uiCallbackTimersRef.current = uiCallbackTimersRef.current.filter((item) => item !== timer);
@@ -542,15 +502,15 @@ export function Topology({
         deferUiCallback(() => latestOnHoverAgentRef.current(null));
       }
     };
-    const handleRoam = () => {
-      syncGraphViewFromChart(chart);
-      scheduleGraphicOverlay();
-    };
     const resizeChart = () => {
       chart.resize({
         width: host.clientWidth,
         height: host.clientHeight,
       });
+      const currentView = graphViewRef.current;
+      chart.setOption({
+        series: [{ id: GRAPH_SERIES_ID, center: currentView.center, zoom: currentView.zoom }],
+      }, { lazyUpdate: true });
       scheduleGraphicOverlay();
     };
     const applyChartView = (view: GraphView) => {
@@ -562,11 +522,11 @@ export function Topology({
       scheduleGraphicOverlay();
     };
     const zoomChart = (zoom: number) => {
-      const currentView = readGraphView(chart) ?? graphViewRef.current;
+      const currentView = graphViewRef.current;
       applyChartView({ ...currentView, zoom });
     };
     const panChartBy = (deltaX: number, deltaY: number) => {
-      const currentView = readGraphView(chart) ?? graphViewRef.current;
+      const currentView = graphViewRef.current;
       const anchor: [number, number] = [host.clientWidth / 2, host.clientHeight / 2];
       const anchorData = pixelToDataPoint(chart, anchor);
       const shiftedData = pixelToDataPoint(chart, [anchor[0] + deltaX, anchor[1] + deltaY]);
@@ -609,7 +569,7 @@ export function Topology({
     };
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const currentView = readGraphView(chart) ?? graphViewRef.current;
+      const currentView = graphViewRef.current;
       const factor = Math.exp(-event.deltaY * 0.0016);
       zoomChart(currentView.zoom * factor);
     };
@@ -666,7 +626,7 @@ export function Topology({
         const points = [...pointers.values()];
         pinchStart = {
           distance: pointDistance(points[0], points[1]),
-          zoom: (readGraphView(chart) ?? graphViewRef.current).zoom,
+          zoom: graphViewRef.current.zoom,
         };
       }
     };
@@ -703,7 +663,7 @@ export function Topology({
         if (!pinchStart || pinchStart.distance <= 0) {
           pinchStart = {
             distance,
-            zoom: (readGraphView(chart) ?? graphViewRef.current).zoom,
+            zoom: graphViewRef.current.zoom,
           };
           return;
         }
@@ -733,7 +693,6 @@ export function Topology({
     chart.on("click", handleClick);
     chart.on("mouseover", handleMouseOver);
     chart.on("mouseout", handleMouseOut);
-    chart.on("graphRoam", handleRoam);
     host.addEventListener("wheel", handleWheel, { passive: false });
     host.addEventListener("pointerdown", handlePointerDown);
     host.addEventListener("pointermove", handlePointerMove);
@@ -773,7 +732,6 @@ export function Topology({
       chart.off("click", handleClick);
       chart.off("mouseover", handleMouseOver);
       chart.off("mouseout", handleMouseOut);
-      chart.off("graphRoam", handleRoam);
       host.removeEventListener("wheel", handleWheel);
       host.removeEventListener("pointerdown", handlePointerDown);
       host.removeEventListener("pointermove", handlePointerMove);
@@ -782,7 +740,7 @@ export function Topology({
       chart.dispose();
       chartRef.current = null;
     };
-  }, [deferUiCallback, scheduleGraphicOverlay, syncGraphViewFromChart]);
+  }, [deferUiCallback, scheduleGraphicOverlay]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -807,7 +765,7 @@ export function Topology({
 
   const zoomBy = useCallback((direction: "in" | "out") => {
     const chart = chartRef.current;
-    const currentView = readGraphView(chart) ?? graphViewRef.current;
+    const currentView = graphViewRef.current;
     const nextZoom =
       direction === "in"
         ? Math.min(GRAPH_MAX_ZOOM, currentView.zoom + GRAPH_ZOOM_STEP)
@@ -838,7 +796,7 @@ export function Topology({
         <div className="section-title-main">
           <span>推演画布</span>
           <span className={visibleEdges.length ? "graph-health" : "graph-health muted"}>
-            {visibleEdges.length ? `${visibleEdges.length} 条关系` : "暂无关系链路"}
+            {visibleEdges.length ? `${visibleEdges.length} 条 Agent 关系` : "暂无 Agent 关系"}
           </span>
         </div>
         <div className="canvas-tools">
@@ -861,15 +819,11 @@ export function Topology({
           </span>
         </div>
       </div>
-      <div
-        ref={chartHostRef}
-        aria-label="推演拓扑图"
-        className="topology-canvas topology-chart"
-        role="img"
-      >
+      <div className="topology-canvas" aria-label="推演拓扑图" role="img">
+        <div ref={chartHostRef} className="topology-chart" />
         {visibleEdges.length === 0 && (
           <div className="topology-empty">
-            当前节拍只有智能体状态，还没有公开事件、信念变化或交易影响形成的关系链路。
+            当前节拍只有智能体状态，还没有 Agent 之间的消息、交易或信念影响关系。
           </div>
         )}
       </div>
@@ -901,9 +855,7 @@ function findVisualNodeAtPixel(
     const nodePixel = chart.convertToPixel({ seriesId: GRAPH_SERIES_ID }, [visualNode.x, visualNode.y]);
     if (!Array.isArray(nodePixel) || nodePixel.length < 2) continue;
     const distance = Math.hypot(pixel[0] - clampFinite(nodePixel[0], 0), pixel[1] - clampFinite(nodePixel[1], 0));
-    const radius = visualNode.kind === "source"
-      ? SOURCE_NODE_SYMBOL_SIZE / 2 + 8
-      : agentTypeVisual(visualNode.node.agent_type).size / 2 + 8;
+    const radius = agentTypeVisual(visualNode.node.agent_type).size / 2 + 8;
     if (distance <= radius && distance < matchedDistance) {
       matchedNode = visualNode;
       matchedDistance = distance;
@@ -922,32 +874,6 @@ function pixelToDataPoint(
   const y = clampFinite(converted[1], NaN);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   return [x, y];
-}
-
-function readGraphView(chart: ChartInstance | null): GraphView | null {
-  if (!chart || chart.isDisposed()) return null;
-  const option = chart.getOption() as {
-    series?: Array<{
-      id?: string;
-      zoom?: unknown;
-      center?: unknown;
-    }>;
-  };
-  const series = option.series?.find((entry) => entry.id === GRAPH_SERIES_ID) ?? option.series?.[0];
-  if (!series) return null;
-  const zoom = typeof series.zoom === "number" && Number.isFinite(series.zoom)
-    ? series.zoom
-    : GRAPH_DEFAULT_VIEW.zoom;
-  const center = Array.isArray(series.center) && series.center.length >= 2
-    ? series.center
-    : GRAPH_DEFAULT_CENTER;
-  return {
-    zoom: Number(Math.max(GRAPH_MIN_ZOOM, Math.min(GRAPH_MAX_ZOOM, zoom)).toFixed(2)),
-    center: [
-      clampFinite(center[0], GRAPH_DEFAULT_CENTER[0]),
-      clampFinite(center[1], GRAPH_DEFAULT_CENTER[1]),
-    ],
-  };
 }
 
 function setGraphViewState(
@@ -1107,51 +1033,14 @@ interface VisualAgentNode {
   y: number;
 }
 
-interface VisualSourceNode {
-  id: string;
-  kind: "source";
-  x: number;
-  y: number;
-}
+type VisualNode = VisualAgentNode;
 
-type VisualNode = VisualAgentNode | VisualSourceNode;
-
-function buildVisualNodes(
-  agentNodes: ReadonlyArray<TopologyNode>,
-  edges: ReadonlyArray<AuditGraphEdge>,
-  positionOverrides: ReadonlyMap<string, NodePoint>,
-): VisualNode[] {
-  const visualNodes: VisualNode[] = agentNodes.map((node) => ({
+function buildVisualNodes(agentNodes: ReadonlyArray<TopologyNode>): VisualNode[] {
+  return agentNodes.map((node) => ({
     id: node.agent_id,
     kind: "agent",
     node,
     x: node.x,
     y: node.y,
   }));
-  const agentIds = new Set(agentNodes.map((node) => node.agent_id));
-  const sourceIds = new Set<string>();
-  for (const edge of edges) {
-    if (!agentIds.has(edge.source)) sourceIds.add(edge.source);
-    if (!agentIds.has(edge.target)) sourceIds.add(edge.target);
-  }
-  [...sourceIds].forEach((id, index) => {
-    const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(sourceIds.size, 1);
-    const override = positionOverrides.get(id);
-    visualNodes.push({
-      id,
-      kind: "source",
-      x: override?.x ?? 50 + Math.cos(angle) * 12,
-      y: override?.y ?? 50 + Math.sin(angle) * 10,
-    });
-  });
-  return visualNodes;
-}
-
-function sourceLabel(id: string): string {
-  if (id === "public_event") return "公开事件";
-  if (id.startsWith("forum_") || id.startsWith("forum")) return "论坛消息";
-  if (id.startsWith("mkt_") || id.startsWith("market")) return "行情事件";
-  if (id.startsWith("tape_")) return "盘口异动";
-  if (id.startsWith("news_")) return "新闻";
-  return id;
 }

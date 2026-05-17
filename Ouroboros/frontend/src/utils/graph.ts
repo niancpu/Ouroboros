@@ -53,6 +53,14 @@ export function pruneGraphEdges(
   return [...source].sort((a, b) => b.weight - a.weight).slice(0, EDGE_HARD_LIMIT);
 }
 
+export function agentOnlyGraphEdges(
+  edges: ReadonlyArray<AuditGraphEdge>,
+  nodes: ReadonlyArray<Pick<AuditGraphNode, "agent_id">>,
+): AuditGraphEdge[] {
+  const agentIds = new Set(nodes.map((node) => node.agent_id));
+  return edges.filter((edge) => agentIds.has(edge.source) && agentIds.has(edge.target));
+}
+
 export function agentSummaryToGraphNode(
   agent: AgentSummary,
   beliefScore: number,
