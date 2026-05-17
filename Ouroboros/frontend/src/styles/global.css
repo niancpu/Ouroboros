@@ -704,14 +704,6 @@ h3 {
   overflow: hidden;
 }
 
-.topology-workbench {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 184px;
-  min-height: 0;
-  overflow: hidden;
-  border-bottom: var(--divider);
-}
-
 .topology,
 .market-curves {
   display: flex;
@@ -721,10 +713,6 @@ h3 {
   border: 0;
   border-bottom: var(--divider);
   background: var(--color-surface);
-}
-
-.topology-workbench .topology {
-  border-bottom: 0;
 }
 
 .section-title {
@@ -874,7 +862,7 @@ h3 {
   gap: var(--space-3);
   min-width: 0;
   overflow: hidden;
-  border-left: var(--divider);
+  border-bottom: var(--divider);
   background: var(--color-surface);
   padding: 12px var(--space-3);
   font-family: var(--font-machine);

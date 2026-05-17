@@ -359,23 +359,20 @@ export function LivePage() {
           </aside>
 
           <section className="canvas-stack">
-            <div className="topology-workbench">
-              <Topology
-                agents={agentRoster}
-                graph={auditGraph}
-                agentLifecycleMap={lifecycleMap}
-                edgeMode={edgeMode}
-                hoveredAgentId={hoveredAgentId}
-                selectedAgentId={selectedAgentId}
-                selectedReasonRef={selectedReasonRef}
-                tickId={displayTick}
-                onHoverAgent={setHoveredAgentId}
-                onSelectAgent={ui.setSelectedAgentId}
-                onSelectReason={setSelectedReasonRef}
-                onEdgeModeChange={setEdgeMode}
-              />
-              <RecommendationStatusPanel progress={recommendationProgress} />
-            </div>
+            <Topology
+              agents={agentRoster}
+              graph={auditGraph}
+              agentLifecycleMap={lifecycleMap}
+              edgeMode={edgeMode}
+              hoveredAgentId={hoveredAgentId}
+              selectedAgentId={selectedAgentId}
+              selectedReasonRef={selectedReasonRef}
+              tickId={displayTick}
+              onHoverAgent={setHoveredAgentId}
+              onSelectAgent={ui.setSelectedAgentId}
+              onSelectReason={setSelectedReasonRef}
+              onEdgeModeChange={setEdgeMode}
+            />
             <TickScrubber
               currentIndex={effectiveScrubIndex}
               ticks={tickList}
@@ -385,6 +382,7 @@ export function LivePage() {
           </section>
 
           <aside className="order-book">
+            <RecommendationStatusPanel progress={recommendationProgress} />
             <h2>盘口</h2>
             {latestMarket.level2.asks.length || latestMarket.level2.bids.length ? (
               <>
