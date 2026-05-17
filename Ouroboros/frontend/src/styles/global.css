@@ -715,6 +715,20 @@ h3 {
   background: var(--color-surface);
 }
 
+.topology:fullscreen {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  background: var(--color-surface);
+}
+
+.topology:fullscreen .topology-canvas {
+  min-height: 0;
+  flex: 1;
+}
+
 .section-title {
   display: flex;
   align-items: center;

@@ -12,7 +12,7 @@ import { GraphChart } from "echarts/charts";
 import { TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { Minus, Maximize2, Plus } from "lucide-react";
+import { Minus, Maximize2, Minimize2, Plus } from "lucide-react";
 import type {
   AgentSummary,
   AuditGraphEdge,
@@ -138,6 +138,7 @@ export function Topology({
   onSelectReason,
   onEdgeModeChange,
 }: TopologyProps) {
+  const topologyRef = useRef<HTMLDivElement | null>(null);
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
   const latestVisualNodesRef = useRef<VisualNode[]>([]);
@@ -151,6 +152,7 @@ export function Topology({
   const uiCallbackTimersRef = useRef<number[]>([]);
   const graphViewRef = useRef<GraphView>(GRAPH_DEFAULT_VIEW);
   const [graphView, setGraphView] = useState<GraphView>(GRAPH_DEFAULT_VIEW);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const graphNodes: AuditGraphNode[] = graph.nodes.length
     ? graph.nodes
@@ -453,6 +455,28 @@ export function Topology({
     }, 0);
   }, []);
 
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const nextIsFullscreen = document.fullscreenElement === topologyRef.current;
+      setIsFullscreen(nextIsFullscreen);
+      window.requestAnimationFrame(() => {
+        const host = chartHostRef.current;
+        const chart = chartRef.current;
+        if (!host || !chart || chart.isDisposed()) return;
+        chart.resize({
+          width: host.clientWidth,
+          height: host.clientHeight,
+        });
+        scheduleGraphicOverlay();
+      });
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, [scheduleGraphicOverlay]);
+
   const syncGraphViewFromChart = useCallback((chart: ChartInstance) => {
     const nextView = readGraphView(chart);
     if (!nextView) return;
@@ -716,8 +740,18 @@ export function Topology({
     }
   }, [scheduleGraphicOverlay]);
 
+  const toggleFullscreen = useCallback(() => {
+    const root = topologyRef.current;
+    if (!root) return;
+    if (document.fullscreenElement === root) {
+      void document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    void root.requestFullscreen().catch(() => undefined);
+  }, []);
+
   return (
-    <div className="topology panel">
+    <div className="topology panel" ref={topologyRef}>
       <div className="section-title">
         <span>推演画布</span>
         <span className={visibleEdges.length ? "graph-health" : "graph-health muted"}>
@@ -732,7 +766,14 @@ export function Topology({
             <button type="button" onClick={() => zoomBy("out")} title="缩小"><Minus size={14} /></button>
             <span className="zoom-level">{Math.round(graphView.zoom * 100)}%</span>
             <button type="button" onClick={() => zoomBy("in")} title="放大"><Plus size={14} /></button>
-            <button type="button" onClick={resetView} title="重置缩放"><Maximize2 size={14} /></button>
+            <button
+              aria-label={isFullscreen ? "退出图谱全屏" : "图谱全屏"}
+              type="button"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "退出图谱全屏" : "图谱全屏"}
+            >
+              {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
           </span>
         </div>
       </div>
