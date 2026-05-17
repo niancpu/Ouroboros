@@ -17,11 +17,12 @@ import type {
   AgentSummary,
   AuditGraphEdge,
   AuditGraphNode,
+  AgentType,
   AuditGraphPayload,
   LifecycleState,
 } from "../../types/api";
 import { agentTypeLabels, labelFrom, riskStateLabels } from "../../i18n/labels";
-import { formatAgentCode, formatPercent, formatTick } from "../../utils/format";
+import { displayAgentName, formatPercent, formatTick } from "../../utils/format";
 import {
   buildSpotlightIds,
   deterministicNodePoint,
@@ -94,7 +95,7 @@ interface ChartNodeDatum {
   y: number;
   value: number;
   sanitizedTooltip: string;
-  symbol: "circle";
+  symbol: "circle" | "rect" | "roundRect" | "triangle" | "diamond" | "pin";
   symbolSize: number;
   itemStyle: {
     color: string;
@@ -183,18 +184,19 @@ export function Topology({
           y: visualNode.y,
           value: 0,
           sanitizedTooltip: `${sourceLabel(visualNode.id)} / 公开来源`,
-          symbol: "circle",
-          symbolSize: 11,
+          symbol: "diamond",
+          symbolSize: 14,
           itemStyle: {
-            color: "#f6f6f6",
+            color: "#efefef",
             borderColor: C.secondary,
-            borderWidth: 1,
-            opacity: 0.86,
+            borderWidth: 1.3,
+            opacity: 0.94,
           },
         };
       }
 
       const node = visualNode.node;
+      const visual = agentTypeVisual(node.agent_type);
       const lifecycleState = agentLifecycleMap.get(node.agent_id);
       const isSelected = node.agent_id === selectedAgentId;
       const isDimmed = spotlightIds ? !spotlightIds.has(node.agent_id) : false;
@@ -204,10 +206,10 @@ export function Topology({
           ? C.danger
           : isBlue
             ? C.accent
-            : C.text;
+            : visual.borderColor;
       return {
         id: node.agent_id,
-        name: node.agent_id,
+        name: displayAgentName(node.agent_id),
         nodeKind: "agent",
         agentId: node.agent_id,
         x: node.x,
@@ -220,12 +222,12 @@ export function Topology({
           `C:${node.belief_score.toFixed(2)}`,
           `P:${formatPercent(positionExposure(node, graphNodes))}`,
         ].join(" / "),
-        symbol: "circle",
-        symbolSize: 16,
+        symbol: visual.symbol,
+        symbolSize: visual.size,
         itemStyle: {
-          color: C.surface,
+          color: visual.fillColor,
           borderColor: stroke,
-          borderWidth: isSelected ? 2 : 1.2,
+          borderWidth: isSelected ? 2.4 : visual.borderWidth,
           opacity: isDimmed ? 0.1 : 1,
         },
       };
@@ -287,7 +289,7 @@ export function Topology({
           id: GRAPH_SERIES_ID,
           type: "graph",
           layout: "none",
-          roam: true,
+          roam: false,
           zoom: graphViewRef.current.zoom,
           center: graphViewRef.current.center,
           scaleLimit: {
@@ -359,9 +361,11 @@ export function Topology({
       const elbowX = labelRight ? x + 20 : x - 20;
       const labelX = labelRight ? elbowX + 6 : elbowX - 6;
       const labelY = Math.max(18, Math.min(height - 18, y - 14));
-      const code = formatAgentCode(node.agent_id, allNodes);
       const dimmed = spotlightIds && !spotlightIds.has(node.agent_id);
       const opacity = dimmed ? 0.1 : 1;
+      const typeLabel = labelFrom(agentTypeLabels, node.agent_type);
+      const riskLabel = labelFrom(riskStateLabels, node.risk_state);
+      const displayName = displayAgentName(node.agent_id);
 
       if (isSelected) {
         overlay.add(new echarts.graphic.Rect({
@@ -403,9 +407,9 @@ export function Topology({
           x: labelX,
           y: labelY - 7,
           style: {
-            text: `[${code}] C:${node.belief_score.toFixed(2)} P:${formatPercent(exposure)}`,
+            text: `${displayName} ${typeLabel} 信念${node.belief_score.toFixed(2)} 持仓${formatPercent(exposure)} ${riskLabel}`,
             fill: dimmed ? "rgba(0,0,0,0.1)" : C.secondary,
-            font: "10px JetBrains Mono, Courier New, monospace",
+            font: "11px Helvetica Neue, Arial, PingFang SC, sans-serif",
             align: labelRight ? "left" : "right",
             verticalAlign: "middle",
           },
@@ -512,11 +516,137 @@ export function Topology({
       syncGraphViewFromChart(chart);
       scheduleGraphicOverlay();
     };
+    const resizeChart = () => {
+      chart.resize({
+        width: host.clientWidth,
+        height: host.clientHeight,
+      });
+      scheduleGraphicOverlay();
+    };
+    const applyChartView = (view: GraphView) => {
+      const nextView = normalizeGraphView(view);
+      setGraphViewState(nextView, graphViewRef, setGraphView);
+      chart.setOption({
+        series: [{ id: GRAPH_SERIES_ID, center: nextView.center, zoom: nextView.zoom }],
+      }, { lazyUpdate: true });
+      scheduleGraphicOverlay();
+    };
+    const zoomChart = (zoom: number) => {
+      const currentView = readGraphView(chart) ?? graphViewRef.current;
+      applyChartView({ ...currentView, zoom });
+    };
+    const panChartBy = (deltaX: number, deltaY: number) => {
+      const currentView = readGraphView(chart) ?? graphViewRef.current;
+      const anchor: [number, number] = [host.clientWidth / 2, host.clientHeight / 2];
+      const anchorData = pixelToDataPoint(chart, anchor);
+      const shiftedData = pixelToDataPoint(chart, [anchor[0] + deltaX, anchor[1] + deltaY]);
+      if (!anchorData || !shiftedData) return;
+      applyChartView({
+        ...currentView,
+        center: [
+          currentView.center[0] - (shiftedData[0] - anchorData[0]),
+          currentView.center[1] - (shiftedData[1] - anchorData[1]),
+        ],
+      });
+    };
+    const pointers = new Map<number, { x: number; y: number; pointerType: string }>();
+    let mouseDragPoint: { x: number; y: number } | null = null;
+    let touchDragPoint: { x: number; y: number } | null = null;
+    let pinchStart: { distance: number; zoom: number } | null = null;
+    const resetPinch = () => {
+      pinchStart = null;
+      touchDragPoint = null;
+      if (pointers.size === 1) {
+        const [point] = [...pointers.values()];
+        touchDragPoint = { x: point.x, y: point.y };
+      }
+    };
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const currentView = readGraphView(chart) ?? graphViewRef.current;
+      const factor = Math.exp(-event.deltaY * 0.0016);
+      zoomChart(currentView.zoom * factor);
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") {
+        if (event.button !== 0) return;
+        mouseDragPoint = { x: event.clientX, y: event.clientY };
+        host.setPointerCapture(event.pointerId);
+        return;
+      }
+      event.preventDefault();
+      pointers.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+        pointerType: event.pointerType,
+      });
+      host.setPointerCapture(event.pointerId);
+      if (pointers.size === 1) {
+        touchDragPoint = { x: event.clientX, y: event.clientY };
+      }
+      if (pointers.size === 2) {
+        const points = [...pointers.values()];
+        pinchStart = {
+          distance: pointDistance(points[0], points[1]),
+          zoom: (readGraphView(chart) ?? graphViewRef.current).zoom,
+        };
+      }
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") {
+        if (!mouseDragPoint || (event.buttons & 1) !== 1) return;
+        event.preventDefault();
+        panChartBy(event.clientX - mouseDragPoint.x, event.clientY - mouseDragPoint.y);
+        mouseDragPoint = { x: event.clientX, y: event.clientY };
+        return;
+      }
+      if (!pointers.has(event.pointerId)) return;
+      event.preventDefault();
+      pointers.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+        pointerType: event.pointerType,
+      });
+      if (pointers.size >= 2) {
+        const points = [...pointers.values()];
+        const distance = pointDistance(points[0], points[1]);
+        if (!pinchStart || pinchStart.distance <= 0) {
+          pinchStart = {
+            distance,
+            zoom: (readGraphView(chart) ?? graphViewRef.current).zoom,
+          };
+          return;
+        }
+        zoomChart(pinchStart.zoom * (distance / pinchStart.distance));
+        return;
+      }
+      if (touchDragPoint) {
+        panChartBy(event.clientX - touchDragPoint.x, event.clientY - touchDragPoint.y);
+      }
+      touchDragPoint = { x: event.clientX, y: event.clientY };
+    };
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") {
+        mouseDragPoint = null;
+      } else {
+        pointers.delete(event.pointerId);
+        resetPinch();
+      }
+      if (host.hasPointerCapture(event.pointerId)) {
+        host.releasePointerCapture(event.pointerId);
+      }
+    };
     chart.on("click", handleClick);
     chart.on("mouseover", handleMouseOver);
     chart.on("mouseout", handleMouseOut);
     chart.on("graphRoam", handleRoam);
+    host.addEventListener("wheel", handleWheel, { passive: false });
+    host.addEventListener("pointerdown", handlePointerDown);
+    host.addEventListener("pointermove", handlePointerMove);
+    host.addEventListener("pointerup", handlePointerEnd);
+    host.addEventListener("pointercancel", handlePointerEnd);
     let resizeTimer: number | null = null;
+    window.requestAnimationFrame(resizeChart);
     const resizeObserver = new ResizeObserver(() => {
       if (resizeTimer !== null) {
         window.clearTimeout(resizeTimer);
@@ -524,8 +654,7 @@ export function Topology({
       resizeTimer = window.setTimeout(() => {
         resizeTimer = null;
         if (chart.isDisposed()) return;
-        chart.resize();
-        scheduleGraphicOverlay();
+        resizeChart();
       }, 0);
     });
     resizeObserver.observe(host);
@@ -551,6 +680,11 @@ export function Topology({
       chart.off("mouseover", handleMouseOver);
       chart.off("mouseout", handleMouseOut);
       chart.off("graphRoam", handleRoam);
+      host.removeEventListener("wheel", handleWheel);
+      host.removeEventListener("pointerdown", handlePointerDown);
+      host.removeEventListener("pointermove", handlePointerMove);
+      host.removeEventListener("pointerup", handlePointerEnd);
+      host.removeEventListener("pointercancel", handlePointerEnd);
       chart.dispose();
       chartRef.current = null;
     };
@@ -632,6 +766,22 @@ function clampFinite(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function pointDistance(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pixelToDataPoint(
+  chart: ChartInstance,
+  pixel: [number, number],
+): [number, number] | null {
+  const converted = chart.convertFromPixel({ seriesId: GRAPH_SERIES_ID }, pixel);
+  if (!Array.isArray(converted) || converted.length < 2) return null;
+  const x = clampFinite(converted[0], NaN);
+  const y = clampFinite(converted[1], NaN);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return [x, y];
+}
+
 function readGraphView(chart: ChartInstance | null): GraphView | null {
   if (!chart || chart.isDisposed()) return null;
   const option = chart.getOption() as {
@@ -700,6 +850,76 @@ function watermarkText(text: string) {
     text,
     fill: "rgba(0,0,0,0.22)",
     font: "10px JetBrains Mono, Courier New, monospace",
+  };
+}
+
+function agentTypeVisual(agentType: AgentType): {
+  symbol: ChartNodeDatum["symbol"];
+  size: number;
+  fillColor: string;
+  borderColor: string;
+  borderWidth: number;
+} {
+  if (agentType === "mutual_fund") {
+    return {
+      symbol: "rect",
+      size: 18,
+      fillColor: "#e8f0ff",
+      borderColor: "#0037c8",
+      borderWidth: 1.4,
+    };
+  }
+  if (agentType === "hot_money") {
+    return {
+      symbol: "triangle",
+      size: 18,
+      fillColor: "#fff0d8",
+      borderColor: "#9a3412",
+      borderWidth: 1.4,
+    };
+  }
+  if (agentType === "quant_algo") {
+    return {
+      symbol: "diamond",
+      size: 17,
+      fillColor: "#e7f7ef",
+      borderColor: "#047857",
+      borderWidth: 1.4,
+    };
+  }
+  if (agentType === "national_team") {
+    return {
+      symbol: "pin",
+      size: 19,
+      fillColor: "#ffe8e8",
+      borderColor: "#b91c1c",
+      borderWidth: 1.4,
+    };
+  }
+  if (agentType === "institution") {
+    return {
+      symbol: "roundRect",
+      size: 18,
+      fillColor: "#f1ecff",
+      borderColor: "#5b21b6",
+      borderWidth: 1.4,
+    };
+  }
+  if (agentType === "retail_cluster") {
+    return {
+      symbol: "roundRect",
+      size: 17,
+      fillColor: "#f3f3f3",
+      borderColor: "#2f2f2f",
+      borderWidth: 1.3,
+    };
+  }
+  return {
+    symbol: "circle",
+    size: 16,
+    fillColor: C.surface,
+    borderColor: C.text,
+    borderWidth: 1.2,
   };
 }
 
