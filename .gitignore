@@ -10,6 +10,9 @@ wheels/
 .venv
 
 # Local helper files
+.env
+.env.*
+!.env.example
 AGENTS.md
 CLAUDE.md
 start claude.bat

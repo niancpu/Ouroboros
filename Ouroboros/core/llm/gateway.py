@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from Ouroboros.core.llm.config import LLMConfig
 from Ouroboros.core.schemas import LLMRequest, SCHEMA_VERSION, SchemaValidationError
 from Ouroboros.core.schemas.common import reject_unknown_keys, require_non_empty_str
 
@@ -40,15 +41,19 @@ class LLMGateway:
         window_seconds: float = 60.0,
         clock: Callable[[], float] | None = None,
         provider_name: str = "deterministic_mock",
+        config: LLMConfig | None = None,
     ) -> None:
         if max_requests < 1:
             raise SchemaValidationError("max_requests must be >= 1")
         if window_seconds <= 0:
             raise SchemaValidationError("window_seconds must be > 0")
+        self.config = config or LLMConfig.from_env()
         self._max_requests = max_requests
         self._window_seconds = window_seconds
         self._clock = clock or time.monotonic
-        self._provider_name = provider_name
+        self._provider_name = (
+            provider_name if provider_name != "deterministic_mock" else self.config.provider_name
+        )
         self._window_started_at = self._clock()
         self._used_in_window = 0
 

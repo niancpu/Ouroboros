@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
+import tempfile
 import unittest
+from contextlib import contextmanager
+from inspect import signature
+from pathlib import Path
+from unittest.mock import patch
 
+from Ouroboros.core import llm as llm_module
 from Ouroboros.core.llm import LLMGateway
 from Ouroboros.core.schemas import LLMRequest, SchemaValidationError
 
@@ -34,6 +42,49 @@ class MutableClock:
 
 
 class LLMGatewayTests(unittest.TestCase):
+    def _llm_config_type(self) -> type:
+        config_type = getattr(llm_module, "LLMConfig", None)
+        self.assertIsNotNone(
+            config_type,
+            "Ouroboros.core.llm must export LLMConfig for api_key/base_url/model/provider_name",
+        )
+        return config_type
+
+    def _load_llm_config(self, *, env_file: Path | None = None) -> object:
+        config_type = self._llm_config_type()
+        if hasattr(config_type, "from_env"):
+            if env_file is None:
+                return config_type.from_env()
+            parameters = signature(config_type.from_env).parameters
+            if "env_path" in parameters:
+                return config_type.from_env(env_path=env_file)
+            if "env_file" in parameters:
+                return config_type.from_env(env_file=env_file)
+            self.fail("LLMConfig.from_env() must accept an env_path or env_file argument")
+
+        loader = getattr(llm_module, "load_llm_config", None)
+        self.assertIsNotNone(
+            loader,
+            "LLM config must be loadable via LLMConfig.from_env() or load_llm_config()",
+        )
+        if env_file is None:
+            return loader()
+        parameters = signature(loader).parameters
+        if "env_path" in parameters:
+            return loader(env_path=env_file)
+        if "env_file" in parameters:
+            return loader(env_file=env_file)
+        self.fail("load_llm_config() must accept an env_path or env_file argument")
+
+    @contextmanager
+    def _forbid_network(self):
+        with patch.object(
+            socket.socket,
+            "connect",
+            side_effect=AssertionError("LLM config tests must not access the network"),
+        ):
+            yield
+
     def test_complete_returns_schema_shaped_mock_output(self) -> None:
         gateway = LLMGateway()
 
@@ -45,6 +96,79 @@ class LLMGatewayTests(unittest.TestCase):
         content = json.loads(candidate["content"])
         self.assertEqual(content["action"]["action_type"], "hold")
         self.assertEqual(content["agent_id"], "agent_a")
+
+    def test_complete_accepts_explicit_llm_config_without_leaking_secrets(self) -> None:
+        config_type = self._llm_config_type()
+        config = config_type(
+            api_key="test-api-key",
+            base_url="https://llm.example.test/v1",
+            model="test-model",
+            provider_name="configured_mock",
+        )
+        gateway = LLMGateway(config=config)
+
+        with self._forbid_network():
+            output = gateway.complete(LLMRequest.from_dict(llm_request()))
+
+        self.assertEqual(output["provider"], "configured_mock")
+        serialized_output = json.dumps(output, sort_keys=True)
+        self.assertNotIn("test-api-key", serialized_output)
+        self.assertNotIn("https://llm.example.test/v1", serialized_output)
+        self.assertNotIn("test-model", serialized_output)
+
+    def test_llm_config_loads_from_environment(self) -> None:
+        env = {
+            "OUROBOROS_LLM_API_KEY": "env-api-key",
+            "OUROBOROS_LLM_BASE_URL": "https://env-llm.example.test/v1",
+            "OUROBOROS_LLM_MODEL": "env-model",
+            "OUROBOROS_LLM_PROVIDER": "env_provider",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            config = self._load_llm_config()
+
+        self.assertEqual(config.api_key, "env-api-key")
+        self.assertEqual(config.base_url, "https://env-llm.example.test/v1")
+        self.assertEqual(config.model, "env-model")
+        self.assertEqual(config.provider_name, "env_provider")
+
+        gateway = LLMGateway(config=config)
+        with self._forbid_network():
+            output = gateway.complete(llm_request())
+
+        self.assertEqual(output["provider"], "env_provider")
+
+    def test_llm_config_loads_from_dotenv_when_environment_is_absent(self) -> None:
+        llm_env_keys = (
+            "OUROBOROS_LLM_API_KEY",
+            "OUROBOROS_LLM_BASE_URL",
+            "OUROBOROS_LLM_MODEL",
+            "OUROBOROS_LLM_PROVIDER",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            env_file = Path(tmp_dir) / ".env"
+            env_file.write_text(
+                "\n".join(
+                    [
+                        "OUROBOROS_LLM_API_KEY=dotenv-api-key",
+                        "OUROBOROS_LLM_BASE_URL=https://dotenv-llm.example.test/v1",
+                        "OUROBOROS_LLM_MODEL=dotenv-model",
+                        "OUROBOROS_LLM_PROVIDER=dotenv_provider",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {key: "" for key in llm_env_keys}, clear=False):
+                for key in llm_env_keys:
+                    os.environ.pop(key, None)
+                config = self._load_llm_config(env_file=env_file)
+
+        self.assertEqual(config.api_key, "dotenv-api-key")
+        self.assertEqual(config.base_url, "https://dotenv-llm.example.test/v1")
+        self.assertEqual(config.model, "dotenv-model")
+        self.assertEqual(config.provider_name, "dotenv_provider")
 
     def test_rate_limit_is_deterministic_and_resets_by_window(self) -> None:
         clock = MutableClock()
