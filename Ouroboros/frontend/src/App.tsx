@@ -1,6 +1,6 @@
 import { TopNav } from "./components/shell/TopNav";
 import { ChronosPage } from "./pages/ChronosPage";
-import { ConfigurationPage } from "./pages/ConfigurationPage";
+import ConfigurationPage from "./pages/ConfigurationPage";
 import { DossierPage } from "./pages/DossierPage";
 import { EntityPage } from "./pages/EntityPage";
 import { LivePage } from "./pages/LivePage";

@@ -1,6 +1,13 @@
 import type { AuditGraphNode, LifecycleState } from "../../types/api";
 import { positionExposure, type NodePoint } from "../../utils/graph";
 
+const C = {
+  accent: "var(--color-accent, #1e3a5f)",
+  danger: "var(--color-danger, #b91c1c)",
+  text: "var(--color-text-primary, #1a1a2e)",
+  surface: "var(--color-surface, #ffffff)",
+} as const;
+
 interface NodeGlyphProps {
   node: AuditGraphNode & NodePoint;
   allNodes: ReadonlyArray<AuditGraphNode>;
@@ -19,24 +26,24 @@ function resolveLifecycleVisual(
   riskState: AuditGraphNode["risk_state"],
   lifecycleState?: LifecycleState,
 ): LifecycleVisual {
-  const warningStroke = riskState === "warning" ? "#002fa7" : "#000";
+  const warningStroke = riskState === "warning" ? C.accent : C.text;
   switch (lifecycleState) {
     case "margin_call":
-      return { stroke: "#dc2626", rightMarks: 1, markColor: "#dc2626" };
+      return { stroke: C.danger, rightMarks: 1, markColor: C.danger };
     case "liquidating":
-      return { stroke: "#dc2626", rightMarks: 2, markColor: "#dc2626" };
+      return { stroke: C.danger, rightMarks: 2, markColor: C.danger };
     case "terminated":
-      return { stroke: "#000", rightMarks: 2, markColor: "#000" };
+      return { stroke: C.text, rightMarks: 2, markColor: C.text };
     case "suspended":
       return {
-        stroke: "#000",
+        stroke: C.text,
         fillOverride: "url(#node-suspended-stripes)",
         rightMarks: 0,
-        markColor: "#000",
+        markColor: C.text,
       };
     case "active":
     default:
-      return { stroke: warningStroke, rightMarks: 0, markColor: "#000" };
+      return { stroke: warningStroke, rightMarks: 0, markColor: C.text };
   }
 }
 
@@ -69,15 +76,15 @@ function renderRightMarks(
 }
 
 export function NodeGlyph({ node, allNodes, shape, lifecycleState }: NodeGlyphProps) {
-  const fillHeight =
-    Math.max(0, Math.min(1, Math.abs(node.belief_score - 0.5) * 2)) * 5;
+  const beliefScore = clampNumber(node.belief_score, 0, 1);
+  const fillHeight = Math.max(0, Math.min(1, Math.abs(beliefScore - 0.5) * 2)) * 5;
   const beliefFill =
-    node.belief_score > 0.6
-      ? "#002fa7"
-      : node.belief_score < 0.4
-      ? "#000"
-      : "#fff";
-  const exposure = positionExposure(node, allNodes);
+    beliefScore > 0.6
+      ? C.accent
+      : beliefScore < 0.4
+      ? C.text
+      : C.surface;
+  const exposure = clampNumber(positionExposure(node, allNodes), 0, 1);
   const visual = resolveLifecycleVisual(node.risk_state, lifecycleState);
 
   if (shape === "square") {
@@ -89,7 +96,7 @@ export function NodeGlyph({ node, allNodes, shape, lifecycleState }: NodeGlyphPr
           y={node.y - half}
           width={half * 2}
           height={half * 2}
-          fill={visual.fillOverride ?? "#fff"}
+          fill={visual.fillOverride ?? C.surface}
           stroke={visual.stroke}
           strokeWidth="0.6"
         />
@@ -107,7 +114,7 @@ export function NodeGlyph({ node, allNodes, shape, lifecycleState }: NodeGlyphPr
           y1={node.y + 3.5}
           x2={node.x - 3.4 + exposure * 6.8}
           y2={node.y + 3.5}
-          stroke="#000"
+          stroke={C.text}
           strokeWidth="0.7"
         />
         {renderRightMarks(node.x, node.y - half, visual.rightMarks, visual.markColor, half)}
@@ -122,7 +129,7 @@ export function NodeGlyph({ node, allNodes, shape, lifecycleState }: NodeGlyphPr
         cx={node.x}
         cy={node.y}
         r={radius}
-        fill={visual.fillOverride ?? "#fff"}
+        fill={visual.fillOverride ?? C.surface}
         stroke={visual.stroke}
         strokeWidth="0.6"
       />
@@ -136,10 +143,17 @@ export function NodeGlyph({ node, allNodes, shape, lifecycleState }: NodeGlyphPr
         y1={node.y + 3.5}
         x2={node.x - 3.3 + exposure * 6.6}
         y2={node.y + 3.5}
-        stroke="#000"
+        stroke={C.text}
         strokeWidth="0.7"
       />
       {renderRightMarks(node.x, node.y - radius, visual.rightMarks, visual.markColor, radius)}
     </>
   );
+}
+
+function clampNumber(value: unknown, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return min;
+  }
+  return Math.max(min, Math.min(max, value));
 }

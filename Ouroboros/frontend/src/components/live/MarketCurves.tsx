@@ -34,11 +34,11 @@ export const MarketCurves = memo(function MarketCurves({ bars, lastPrice }: Mark
 
   const allHighs = bars.map((b) => b.high);
   const allLows = bars.map((b) => b.low);
-  const priceMax = Math.max(...allHighs);
-  const priceMin = Math.min(...allLows);
+  const priceMax = safeMax(allHighs, safeNumber(lastPrice));
+  const priceMin = safeMin(allLows, safeNumber(lastPrice));
   const priceRange = Math.max(priceMax - priceMin, 0.01);
 
-  const maxVol = Math.max(...bars.map((b) => b.volume), 1);
+  const maxVol = Math.max(safeMax(bars.map((b) => safeNumber(b.volume)), 1), 1);
 
   function toY(price: number, top: number, bot: number, min: number, range: number) {
     return bot - ((price - min) / range) * (bot - top);
@@ -52,14 +52,14 @@ export const MarketCurves = memo(function MarketCurves({ bars, lastPrice }: Mark
       <div className="section-title">
         <Activity size={16} />
         <span>K线 / 成交量</span>
-        <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "Courier New, monospace" }}>
-          {lastPrice.toFixed(2)}
+        <span style={{ marginLeft: "auto", fontSize: 12, fontFamily: "'JetBrains Mono', 'Courier New', monospace" }}>
+          {safeNumber(lastPrice).toFixed(2)}
         </span>
       </div>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ display: "block", width: "100%", height: "calc(100% - 36px)" }}>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
         {/* Axis lines */}
-        <line x1={PADDING} y1={CANDLE_BOT} x2={100 - PADDING} y2={CANDLE_BOT} stroke="#000" strokeWidth="0.3" />
-        <line x1={PADDING} y1={VOL_BOT} x2={100 - PADDING} y2={VOL_BOT} stroke="#000" strokeWidth="0.3" />
+        <line x1={PADDING} y1={CANDLE_BOT} x2={100 - PADDING} y2={CANDLE_BOT} stroke="var(--color-border, #e5e7eb)" strokeWidth="0.3" />
+        <line x1={PADDING} y1={VOL_BOT} x2={100 - PADDING} y2={VOL_BOT} stroke="var(--color-border, #e5e7eb)" strokeWidth="0.3" />
 
         {bars.map((bar, i) => {
           const cx = PADDING + i * slotW + slotW / 2;
@@ -72,10 +72,10 @@ export const MarketCurves = memo(function MarketCurves({ bars, lastPrice }: Mark
           const bodyH = Math.max(Math.abs(closeY - openY), 0.5);
 
           // A股涨跌色规则：红=涨，绿=跌，黑=平
-          const color = bar.close > bar.open ? "#dc2626" : bar.close < bar.open ? "#10b981" : "#000";
+          const color = bar.close > bar.open ? "var(--color-danger, #b91c1c)" : bar.close < bar.open ? "var(--color-success, #047857)" : "var(--color-text-primary, #1a1a2e)";
 
           // Volume bar
-          const volBarH = Math.max((bar.volume / maxVol) * volH, 0.4);
+          const volBarH = Math.max((safeNumber(bar.volume) / maxVol) * volH, 0.4);
           const volY = VOL_BOT - volBarH;
 
           return (
@@ -106,13 +106,27 @@ export const MarketCurves = memo(function MarketCurves({ bars, lastPrice }: Mark
         })}
 
         {/* Price labels */}
-        <text x={PADDING + 0.5} y={CANDLE_TOP + 3.5} fontSize="3" fill="#000" fontFamily="Courier New">
+        <text x={PADDING + 0.5} y={CANDLE_TOP + 3.5} fontSize="3" fill="var(--color-text-secondary, #6b7280)" fontFamily="'JetBrains Mono', 'Courier New', monospace">
           {priceMax.toFixed(2)}
         </text>
-        <text x={PADDING + 0.5} y={CANDLE_BOT - 1} fontSize="3" fill="#000" fontFamily="Courier New">
+        <text x={PADDING + 0.5} y={CANDLE_BOT - 1} fontSize="3" fill="var(--color-text-secondary, #6b7280)" fontFamily="'JetBrains Mono', 'Courier New', monospace">
           {priceMin.toFixed(2)}
         </text>
       </svg>
     </div>
   );
 });
+
+function safeNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function safeMax(values: ReadonlyArray<number>, fallback: number): number {
+  const finite = values.filter((value) => Number.isFinite(value));
+  return finite.length > 0 ? Math.max(...finite) : fallback;
+}
+
+function safeMin(values: ReadonlyArray<number>, fallback: number): number {
+  const finite = values.filter((value) => Number.isFinite(value));
+  return finite.length > 0 ? Math.min(...finite) : fallback;
+}

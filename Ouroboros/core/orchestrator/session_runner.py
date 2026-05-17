@@ -1155,10 +1155,14 @@ class SessionRunner:
         snapshot = runtime.last_account_snapshots.get(agent_id)
         risk = runtime.last_risk_results.get(agent_id)
         lifecycle = runtime.lifecycle_states.get(agent_id, LifecycleState.ACTIVE)
+        initial_position_value = _position_value(spec.positions, spec.mark_prices)
         data = {
             "agent_id": agent_id,
             "agent_type": spec.permission_profile.agent_type.value,
             "lifecycle_state": lifecycle.value,
+            "risk_state": "normal",
+            "equity": spec.cash + initial_position_value,
+            "position_value": initial_position_value,
         }
         if snapshot is not None:
             data.update(
@@ -1169,6 +1173,7 @@ class SessionRunner:
                     "available_shares": snapshot.available_shares,
                     "frozen_shares": snapshot.frozen_shares,
                     "market_value": snapshot.market_value,
+                    "position_value": snapshot.market_value,
                     "equity": snapshot.equity,
                     "risk_state": snapshot.risk_state.value,
                 }
@@ -1381,6 +1386,13 @@ def _parse_interval(value: str) -> timedelta:
 
 def _frontend_safe_refs(refs: Iterable[str]) -> list[str]:
     return [ref for ref in refs if ref.startswith(FRONTEND_SAFE_EVENT_REF_PREFIXES)]
+
+
+def _position_value(
+    positions: Mapping[str, int],
+    mark_prices: Mapping[str, float],
+) -> float:
+    return sum(float(quantity) * float(mark_prices.get(symbol, 0.0)) for symbol, quantity in positions.items())
 
 
 def _default_session_id(command: CreateSessionCommand, sequence: int) -> str:

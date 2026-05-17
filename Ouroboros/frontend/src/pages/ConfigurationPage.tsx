@@ -39,7 +39,7 @@ const FORM_FIELDS: ReadonlyArray<readonly [string, keyof typeof DEFAULT_FORM]> =
   ["节拍间隔", "tickInterval"],
 ];
 
-export function ConfigurationPage() {
+export default function ConfigurationPage() {
   const session = useSession();
   const ui = useUI();
   const [form, setForm] = useState(DEFAULT_FORM);
@@ -93,7 +93,7 @@ export function ConfigurationPage() {
       <header className="masthead">
         <div>
           <p className="eyebrow">沙盘初始化控制台</p>
-          <h1>[OUROBOROS // 新建推演]</h1>
+          <h1>Ouroboros · 新建推演</h1>
         </div>
         <div className="market-block">
           <span>标的 {displaySymbol(form.symbol)}</span>
@@ -162,7 +162,7 @@ export function ConfigurationPage() {
 
       {hasLocalProfileDraft && (
         <div className="local-profile-warning" role="status">
-          LOCAL PROFILE PREVIEW ONLY // SUBMIT USES agent_profile_set={form.profileSet}
+          本地预览仅供参考，提交时使用 agent_profile_set={form.profileSet}
         </div>
       )}
 
@@ -175,7 +175,7 @@ export function ConfigurationPage() {
         type="submit"
         disabled={isCreating}
       >
-        {isCreating ? "[创建会话中]" : "[启动推演序列]"}
+        {isCreating ? "创建会话中..." : "启动推演序列"}
       </button>
     </form>
   );
