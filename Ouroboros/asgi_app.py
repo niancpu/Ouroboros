@@ -22,7 +22,6 @@ from Ouroboros.core.llm import LLMConfig, LLMGateway
 from Ouroboros.core.orchestrator import SessionAgentSpec, SessionRunner
 from Ouroboros.core.schemas import SCHEMA_VERSION
 from Ouroboros.core.schemas.common import SchemaValidationError
-from Ouroboros.core.schemas.common import OrderActionType, Sentiment
 from Ouroboros.core.web_api.control_rest import ControlRestApi, RestHttpRequest
 from Ouroboros.core.web_api.realtime_ws import FrontendRealtimeGateway, FrontendWsMessage
 
@@ -226,7 +225,7 @@ def _agent_runtime_factory(agent_mode: str) -> Callable[[], AgentRuntime]:
     if agent_mode == _AGENT_MODE_MOCK_HOLD:
         return lambda: AgentRuntime(
             default_actions={
-                template.agent_id: _default_action(template)
+                template.agent_id: {"action_type": "hold"}
                 for template in _DEFAULT_AGENT_TEMPLATES
             }
         )
@@ -244,36 +243,20 @@ def _create_llm_agent_runtime() -> AgentRuntime:
     return AgentRuntime(llm_gateway=gateway)
 
 
-def _default_action(template: _DefaultAgentTemplate) -> dict[str, Any]:
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "agent_id": template.agent_id,
-        "action": {
-            "action_type": OrderActionType.HOLD.value,
-        },
-        "belief_shift": {
-            "confidence_delta": 0.0,
-            "sentiment": Sentiment.NEUTRAL.value,
-            "risk_appetite_delta": 0.0,
-        },
-        "evidence_refs": [_default_evidence_ref(template)],
-    }
-
-
-def _default_evidence_ref(template: _DefaultAgentTemplate) -> str:
-    if template.agent_type == "retail":
-        return "forum_post_default_signal"
-    if template.agent_type == "national_team":
-        return "tape_default_stabilizer"
-    return "mkt_default_opening_signal"
-
-
 _runner = _create_runner()
 _control_api = ControlRestApi(control_plane=_runner)
 _realtime_gateway = FrontendRealtimeGateway()
 _mirrored_seq_by_session: dict[str, int] = {}
 _ws_connections: dict[str, dict[str, WebSocket]] = {}
 _ws_connections_lock = asyncio.Lock()
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+@app.on_event("startup")
+async def _capture_main_loop() -> None:
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
+    _runner.set_frontend_event_sink(_publish_frontend_event_from_runner)
 
 
 async def _json_body(request: Request) -> Mapping[str, Any] | None:
@@ -311,6 +294,30 @@ async def _mirror_replay_events(body: Mapping[str, Any]) -> None:
         await _fanout_ws_messages(session_id, outbound)
     if events:
         _mirrored_seq_by_session[session_id] = int(events[-1]["seq"])
+
+
+def _publish_frontend_event_from_runner(event: Any) -> None:
+    session_id = getattr(event, "session_id", None)
+    seq = getattr(event, "seq", None)
+    if not isinstance(session_id, str) or not isinstance(seq, int):
+        return
+
+    previous_seq = _mirrored_seq_by_session.get(session_id, 0)
+    if seq <= previous_seq:
+        return
+    _mirrored_seq_by_session[session_id] = seq
+
+    loop = _main_loop
+    if loop is None or loop.is_closed():
+        return
+    loop.call_soon_threadsafe(
+        lambda: asyncio.create_task(_publish_frontend_event_to_ws(session_id, event))
+    )
+
+
+async def _publish_frontend_event_to_ws(session_id: str, event: Any) -> None:
+    outbound = _realtime_gateway.publish_event(session_id, event)
+    await _fanout_ws_messages(session_id, outbound)
 
 
 async def _register_ws(session_id: str, client_id: str, websocket: WebSocket) -> None:

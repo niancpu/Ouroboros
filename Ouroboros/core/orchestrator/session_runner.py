@@ -222,6 +222,7 @@ class SessionRunner:
         matching_config: MatchingConfig | None = None,
         runner_config: SessionRunnerConfig | None = None,
         session_id_factory: Callable[[CreateSessionCommand, int], str] | None = None,
+        frontend_event_sink: Callable[[WebEventEnvelope], None] | None = None,
     ) -> None:
         if agent_runtime is not None and agent_runtime_factory is not None:
             raise SchemaValidationError("use either agent_runtime or agent_runtime_factory")
@@ -243,11 +244,20 @@ class SessionRunner:
         self._matching_config = matching_config
         self._config = runner_config or SessionRunnerConfig()
         self._session_id_factory = session_id_factory or _default_session_id
+        self._frontend_event_sink = frontend_event_sink
         self._sessions: dict[str, _SessionRuntime] = {}
         self._orchestrator = MetaOrchestratorStateMachine(
             agent_timeout_seconds=self._config.agent_timeout_seconds
         )
         self._session_sequence = 0
+
+    def set_frontend_event_sink(
+        self,
+        sink: Callable[[WebEventEnvelope], None] | None,
+    ) -> None:
+        """Install an optional realtime sink for newly published Web API events."""
+
+        self._frontend_event_sink = sink
 
     def create_session(
         self, command: CreateSessionCommand | Mapping[str, Any]
@@ -990,6 +1000,7 @@ class SessionRunner:
         artifacts: _TickArtifacts,
     ) -> None:
         batch_id = artifacts.trade_batch.batch_id if artifacts.trade_batch else "batch_none"
+        forced_liquidation_orders: list[OrderInputEvent] = []
         for agent_id in artifacts.active_agent_ids:
             risk = runtime.clearing_house.risk_result(
                 agent_id,
@@ -1006,16 +1017,163 @@ class SessionRunner:
             event = self._orchestrator.last_agent_lifecycle_events[agent_id]
             runtime.lifecycle_states[agent_id] = event.lifecycle_state
             runtime.lifecycle_events[agent_id] = event
+            lifecycle_payload: dict[str, Any] = {
+                **event.to_dict(),
+                "decision": action["decision"],
+            }
+            if action["decision"] == "forced_liquidation":
+                order, liquidation_status = self._forced_liquidation_order_from_action(
+                    runtime,
+                    command,
+                    risk,
+                    action,
+                )
+                lifecycle_payload.update(liquidation_status)
+                if order is not None:
+                    forced_liquidation_orders.append(order)
             self._publish_frontend_event(
                 runtime,
                 event_type="runtime.agent_lifecycle",
                 tick_id=command.tick_id,
                 trace_id=command.trace_id,
                 visibility=WebVisibility.CONTROL_ONLY_VIEW,
-                payload={
-                    **event.to_dict(),
-                    "decision": action["decision"],
-                },
+                payload=lifecycle_payload,
+            )
+        if forced_liquidation_orders:
+            self._submit_forced_liquidation_orders(
+                runtime,
+                command,
+                artifacts,
+                forced_liquidation_orders,
+            )
+
+    def _forced_liquidation_order_from_action(
+        self,
+        runtime: _SessionRuntime,
+        command: RunTickCommand,
+        risk: RiskResult,
+        action: Mapping[str, Any],
+    ) -> tuple[OrderInputEvent | None, dict[str, Any]]:
+        order_event_id = str(
+            action.get("order_event_id")
+            or f"forced_liq_{_stable_id(risk.agent_id)}_{_stable_id(command.tick_id)}"
+        )
+        snapshot = runtime.clearing_house.account_snapshot(
+            risk.agent_id,
+            tick_id=command.tick_id,
+            trace_id=command.trace_id,
+        )
+        available_quantity = snapshot.available_shares.get(runtime.command.symbol, 0)
+        lot_size = runtime.matching_engine.config.lot_size
+        liquidation_quantity = available_quantity - (available_quantity % lot_size)
+        status = {
+            "forced_liquidation_order_event_id": order_event_id,
+            "forced_liquidation_order_status": "queued_for_layer3",
+            "forced_liquidation_quantity": liquidation_quantity,
+            "sellable_quantity": available_quantity,
+        }
+        if available_quantity <= 0:
+            return None, {
+                **status,
+                "forced_liquidation_order_status": "skipped_no_sellable_position",
+                "forced_liquidation_quantity": 0,
+            }
+        if liquidation_quantity <= 0:
+            return None, {
+                **status,
+                "forced_liquidation_order_status": "skipped_below_lot_size",
+                "forced_liquidation_quantity": 0,
+            }
+        order = OrderInputEvent.from_dict(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "event_id": order_event_id,
+                "tick_id": command.tick_id,
+                "trace_id": command.trace_id,
+                "producer": "meta_orchestrator",
+                "visibility": InternalVisibility.CONTROL_ONLY.value,
+                "agent_id": risk.agent_id,
+                "symbol": runtime.command.symbol,
+                "side": "sell",
+                "order_type": "market",
+                "price": None,
+                "quantity": liquidation_quantity,
+                "time_in_force": "ioc",
+                "client_order_id": f"system_forced_liquidation_{_stable_id(risk.agent_id)}_{_stable_id(command.tick_id)}",
+                "order_kind": "forced_liquidation",
+                "reason_code": risk.reason_code,
+                "source_risk_state": risk.risk_state.value,
+            }
+        )
+        return order, status
+
+    def _submit_forced_liquidation_orders(
+        self,
+        runtime: _SessionRuntime,
+        command: RunTickCommand,
+        artifacts: _TickArtifacts,
+        orders: list[OrderInputEvent],
+    ) -> None:
+        for order in orders:
+            runtime.router.publish(
+                Channel.ORDER_INPUT,
+                order,
+                producer="meta_orchestrator",
+            )
+            artifacts.order_inputs.append(order)
+            artifacts.published_event_ids.append(order.event_id)
+
+        submission = runtime.matching_engine.submit_orders(
+            orders,
+            tick_id=command.tick_id,
+        )
+        runtime.last_order_submission = submission
+        artifacts.order_rejects.extend(submission.rejected_orders)
+        if not submission.accepted_orders:
+            return
+
+        trade_batch = runtime.matching_engine.match_orders(command.tick_id)
+        settlement = runtime.clearing_house.settle_trade_batch(trade_batch)
+        runtime.last_trade_batch = trade_batch
+        runtime.last_settlement = settlement
+        artifacts.trade_batch = trade_batch
+        artifacts.settlement = settlement
+
+        for snapshot in settlement.account_snapshots:
+            runtime.last_account_snapshots[snapshot.agent_id] = snapshot
+            runtime.router.publish(
+                Channel.ACCOUNT_SNAPSHOT,
+                snapshot,
+                producer="clearing_house",
+            )
+            self._publish_frontend_event(
+                runtime,
+                event_type="agent.account_snapshot",
+                tick_id=snapshot.tick_id,
+                trace_id=snapshot.trace_id,
+                visibility=map_internal_visibility_to_web(snapshot.visibility),
+                payload=snapshot.to_dict(),
+            )
+
+        if trade_batch.trades:
+            event = runtime.market_data.publish_market_view(
+                symbol=runtime.command.symbol,
+                tick_id=command.tick_id,
+                trace_id=command.trace_id,
+                trade_batch=trade_batch,
+                lob_view=runtime.matching_engine.lob_view(runtime.command.symbol),
+            )
+            runtime.previous_market_event = artifacts.market_event or runtime.last_market_event
+            runtime.last_market_event = event
+            artifacts.market_event = event
+            artifacts.published_event_ids.append(event.event_id)
+            self._publish_frontend_event(
+                runtime,
+                event_type="market.price",
+                tick_id=command.tick_id,
+                trace_id=command.trace_id,
+                visibility=map_internal_visibility_to_web(event.visibility),
+                payload=event.to_dict(),
             )
 
     def _publish_referee_outputs(
@@ -1175,6 +1333,11 @@ class SessionRunner:
         runtime.frontend_events.append(envelope)
         while len(runtime.frontend_events) > self._config.replay_buffer_size:
             runtime.frontend_events.pop(0)
+        if self._frontend_event_sink is not None:
+            try:
+                self._frontend_event_sink(envelope)
+            except Exception:
+                pass
         return envelope
 
     def _active_agent_ids(self, runtime: _SessionRuntime) -> list[str]:

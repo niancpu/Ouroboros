@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from Ouroboros.asgi_app import _create_runner, _default_agent_specs
 from Ouroboros.core.llm import LLMConfig, LLMConfigurationError
+from Ouroboros.core.schemas import OrderActionType, TickContext
 
 
 class AsgiAppDefaultAgentTests(unittest.TestCase):
@@ -61,9 +62,43 @@ class AsgiAppDefaultAgentTests(unittest.TestCase):
         for spec in specs:
             action = runtime._default_actions[spec.agent_id]
             with self.subTest(agent_id=spec.agent_id):
-                self.assertEqual(action["action"]["action_type"], "hold")
-                self.assertIn("belief_shift", action)
-                self.assertTrue(action["evidence_refs"])
+                self.assertEqual(action["action_type"], "hold")
+
+    def test_mock_hold_mode_runtime_act_returns_schema_valid_hold_payload(self) -> None:
+        with patch.dict("os.environ", {"OUROBOROS_AGENT_MODE": "mock_hold"}, clear=True):
+            runner = _create_runner()
+        runtime = runner._agent_runtime_factory()
+        context = TickContext.from_dict(
+            {
+                "schema_version": "v1",
+                "tick_id": "2024-01-02T14:02:00+08:00",
+                "trace_id": "trace_abc",
+                "agent_id": "mutual_fund_a",
+                "agent_role": "mutual_fund",
+                "public_inputs": {"market_price": {"symbol": "demo_stock", "last_price": 10.0}},
+                "private_inputs": {
+                    "account_snapshot": {"agent_id": "mutual_fund_a", "cash": 1000},
+                },
+                "constraints": {
+                    "allowed_actions": ["hold", "buy", "sell", "cancel"],
+                    "deadline_ms": 30000,
+                    "can_post_forum": False,
+                },
+            }
+        )
+
+        payload = runtime.act(context)
+
+        self.assertEqual(payload.schema_version, "v1")
+        self.assertEqual(payload.agent_id, "mutual_fund_a")
+        self.assertEqual(payload.tick_id, "2024-01-02T14:02:00+08:00")
+        self.assertEqual(payload.trace_id, "trace_abc")
+        self.assertEqual(payload.action.action_type, OrderActionType.HOLD)
+        self.assertEqual(payload.evidence_refs, [])
+        self.assertIsNone(payload.belief_shift)
+        self.assertIsNone(payload.forum_post)
+        self.assertIsNone(payload.memory_update)
+        self.assertEqual(payload.to_dict()["schema_version"], "v1")
 
     def test_default_agent_permissions_follow_identity_matrix(self) -> None:
         specs = _default_agent_specs()

@@ -136,14 +136,35 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertEqual(stepped["data"]["status"], "paused")
         self.assertEqual(stepped["data"]["tick_result"]["status"], "committed")
 
+    def test_frontend_event_sink_receives_events_during_tick_publication(self) -> None:
+        pushed: list[dict[str, object]] = []
+        runner = session_runner(frontend_event_sink=lambda event: pushed.append(event.to_dict()))
+        runner.create_session(create_command())
 
-def session_runner() -> SessionRunner:
+        runner.step_session(
+            SESSION_ID,
+            ticks=1,
+            command_id="cmd_step_realtime_sink",
+            trace_id=TRACE,
+        )
+
+        pushed_types = [event["type"] for event in pushed]
+        self.assertGreater(len(pushed), 1)
+        self.assertEqual(pushed[0]["seq"], 1)
+        self.assertEqual(pushed_types[0], "runtime.tick_state")
+        self.assertIn("market.price", pushed_types)
+        self.assertIn("audit.graph", pushed_types)
+        self.assertEqual([event["seq"] for event in pushed], sorted(event["seq"] for event in pushed))
+
+
+def session_runner(frontend_event_sink=None) -> SessionRunner:
     return SessionRunner(
         chronos_repository=chronos_repository(),
         agent_specs=agent_specs(),
         agent_runtime=AgentRuntime(scripted_actions=scripted_actions()),
         matching_config=MatchingConfig(lot_size=100),
         session_id_factory=lambda _command, _sequence: SESSION_ID,
+        frontend_event_sink=frontend_event_sink,
     )
 
 

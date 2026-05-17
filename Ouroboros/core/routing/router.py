@@ -228,7 +228,7 @@ class ChannelRouter:
         self.session_id = session_id
         self.bus = bus or RedisBus(default_ttl_seconds=default_ttl_seconds)
         self._agent_subscriptions: dict[str, frozenset[str]] = {}
-        self._agent_types: dict[str, AgentType] = {}
+        self._agent_permission_profiles: dict[str, AgentPermissionProfile] = {}
 
     def namespaced_channel(self, channel: Channel | str) -> str:
         return self.bus.namespaced_channel(self.session_id, self._coerce_channel(channel).value)
@@ -242,7 +242,7 @@ class ChannelRouter:
             else AgentPermissionProfile.from_dict(profile)
         )
         self._agent_subscriptions[parsed.agent_id] = frozenset(parsed.subscriptions)
-        self._agent_types[parsed.agent_id] = parsed.agent_type
+        self._agent_permission_profiles[parsed.agent_id] = parsed
         return parsed
 
     def publish(
@@ -380,4 +380,38 @@ class ChannelRouter:
         policy = CHANNEL_POLICIES[channel]
         if policy.agent_self_only:
             return payload.get("agent_id") == subscriber.agent_id
+        if channel == Channel.OFFICIAL_NEWS:
+            if subscriber.agent_id is None:
+                return False
+            profile = self._agent_permission_profiles.get(subscriber.agent_id)
+            if profile is None:
+                return False
+            return official_news_visible_to_agent(profile, payload)
         return True
+
+
+_OFFICIAL_NEWS_PERMISSION_TAGS_BY_AGENT_TYPE: dict[AgentType, frozenset[str]] = {
+    AgentType.MUTUAL_FUND: frozenset({"mutual_fund", "institutional"}),
+    AgentType.HOT_MONEY: frozenset({"hot_money"}),
+    AgentType.QUANT_ALGO: frozenset({"quant_algo", "quant"}),
+    AgentType.RETAIL: frozenset({"retail"}),
+    AgentType.NATIONAL_TEAM: frozenset({"national_team", "institutional"}),
+}
+
+
+def official_news_visible_to_agent(
+    profile: AgentPermissionProfile, payload: Mapping[str, Any]
+) -> bool:
+    """Return whether an Official_News event may enter an agent context."""
+
+    scope = set(profile.official_news_scope)
+    if not scope:
+        return False
+    if payload.get("source_type") not in scope:
+        return False
+
+    permission_tags = set(require_str_list(payload.get("permission_tags", []), "permission_tags"))
+    if not permission_tags:
+        return False
+    allowed_tags = _OFFICIAL_NEWS_PERMISSION_TAGS_BY_AGENT_TYPE[profile.agent_type]
+    return bool(permission_tags & allowed_tags)

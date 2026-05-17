@@ -136,7 +136,7 @@ export function Topology({
 }: TopologyProps) {
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
-  const latestNodesRef = useRef<TopologyNode[]>([]);
+  const latestVisualNodesRef = useRef<VisualNode[]>([]);
   const latestGraphNodesRef = useRef<AuditGraphNode[]>([]);
   const latestSelectedAgentIdRef = useRef<string | null>(null);
   const latestLifecycleMapRef = useRef<Map<string, LifecycleState>>(agentLifecycleMap);
@@ -219,8 +219,8 @@ export function Topology({
           node.agent_id,
           labelFrom(agentTypeLabels, node.agent_type),
           labelFrom(riskStateLabels, node.risk_state),
-          `C:${node.belief_score.toFixed(2)}`,
-          `P:${formatPercent(positionExposure(node, graphNodes))}`,
+          `信念 ${node.belief_score.toFixed(2)}`,
+          `持仓 ${formatPercent(positionExposure(node, graphNodes))}`,
         ].join(" / "),
         symbol: visual.symbol,
         symbolSize: visual.size,
@@ -279,7 +279,7 @@ export function Topology({
             data?: Partial<ChartNodeDatum & ChartEdgeDatum>;
           };
           if (item.dataType === "edge") {
-            return `${item.data?.publicReason ?? "PUBLIC REASON"}<br/>W:${formatEdgeWeight(item.data?.weight)}`;
+            return `${item.data?.publicReason ?? "公开原因"}<br/>权重 ${formatEdgeWeight(item.data?.weight)}`;
           }
           return item.data?.sanitizedTooltip ?? "";
         },
@@ -338,21 +338,39 @@ export function Topology({
       x: 12,
       y: 12,
       silent: true,
-      style: watermarkText(`X:-240.50 Y:112.00 // SCALE ${graphView.zoom.toFixed(2)}`),
+      style: watermarkText(`缩放 ${graphView.zoom.toFixed(2)} 倍`),
     }));
     overlay.add(new echarts.graphic.Text({
-      x: Math.max(12, width - 220),
+      x: Math.max(12, width - 184),
       y: Math.max(20, height - 18),
       silent: true,
-      style: watermarkText(`TICK ${formatTick(tickId)} // ECHARTS GRAPH`),
+      style: watermarkText(`节拍 ${formatTick(tickId)} / 推演图谱`),
     }));
 
-    latestNodesRef.current.forEach((node) => {
-      const pixel = chart.convertToPixel({ seriesId: GRAPH_SERIES_ID }, [node.x, node.y]);
+    latestVisualNodesRef.current.forEach((visualNode) => {
+      const pixel = chart.convertToPixel({ seriesId: GRAPH_SERIES_ID }, [visualNode.x, visualNode.y]);
       if (!Array.isArray(pixel)) return;
       const [x, y] = pixel;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
+      if (visualNode.kind === "source") {
+        const labelRight = x < width - 96;
+        overlay.add(new echarts.graphic.Text({
+          silent: true,
+          x: labelRight ? x + 12 : x - 12,
+          y: y - 13,
+          style: {
+            text: sourceLabel(visualNode.id),
+            fill: C.secondary,
+            font: "11px Helvetica Neue, Arial, PingFang SC, sans-serif",
+            align: labelRight ? "left" : "right",
+            verticalAlign: "middle",
+          },
+        }));
+        return;
+      }
+
+      const node = visualNode.node;
       const allNodes = latestGraphNodesRef.current;
       const lifecycleState = latestLifecycleMapRef.current.get(node.agent_id);
       const isSelected = node.agent_id === latestSelectedAgentIdRef.current;
@@ -437,11 +455,11 @@ export function Topology({
   }, [spotlightIds, tickId, graphView.zoom]);
 
   useEffect(() => {
-    latestNodesRef.current = nodes;
+    latestVisualNodesRef.current = visualNodes;
     latestGraphNodesRef.current = graphNodes;
     latestSelectedAgentIdRef.current = selectedAgentId;
     latestLifecycleMapRef.current = agentLifecycleMap;
-  }, [agentLifecycleMap, graphNodes, nodes, selectedAgentId]);
+  }, [agentLifecycleMap, graphNodes, selectedAgentId, visualNodes]);
 
   useEffect(() => {
     latestOnHoverAgentRef.current = onHoverAgent;
@@ -734,7 +752,7 @@ export function Topology({
           {visibleEdges.length ? `${visibleEdges.length} 条关系` : "暂无关系链路"}
         </span>
         <div className="canvas-tools">
-          <button type="button" onClick={() => onEdgeModeChange("current")}>当前 Tick</button>
+          <button type="button" onClick={() => onEdgeModeChange("current")}>当前节拍</button>
           <button type="button" onClick={() => onEdgeModeChange("selected")}>选中链路</button>
           <button type="button" onClick={() => onEdgeModeChange("strong")}>高影响</button>
           <button type="button" onClick={resetView}>重置视图</button>
@@ -754,7 +772,7 @@ export function Topology({
       >
         {visibleEdges.length === 0 && (
           <div className="topology-empty">
-            当前 tick 只有智能体状态，还没有公开事件、信念变化或交易影响形成的关系链路。
+            当前节拍只有智能体状态，还没有公开事件、信念变化或交易影响形成的关系链路。
           </div>
         )}
       </div>

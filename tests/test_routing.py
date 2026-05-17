@@ -24,18 +24,28 @@ class FakeClock:
         self.now += seconds
 
 
-def agent_profile(agent_id: str, *, subscriptions: list[str]) -> dict[str, object]:
+def agent_profile(
+    agent_id: str,
+    *,
+    subscriptions: list[str],
+    agent_type: str = "hot_money",
+    official_news_scope: list[str] | None = None,
+) -> dict[str, object]:
     return {
         "schema_version": "v1",
         "agent_id": agent_id,
-        "agent_type": "hot_money",
+        "agent_type": agent_type,
         "subscriptions": subscriptions,
         "publish_permissions": {
             "order_action": True,
             "ui_audit": True,
             "forum_post": True,
         },
-        "official_news_scope": ["announcement", "news", "regulatory_notice"],
+        "official_news_scope": (
+            ["announcement", "news", "regulatory_notice"]
+            if official_news_scope is None
+            else official_news_scope
+        ),
     }
 
 
@@ -91,6 +101,32 @@ def account_snapshot(agent_id: str, event_id: str) -> dict[str, object]:
         "equity": 5760000.0,
         "risk_state": "normal",
         "source": "layer3_global_ledger",
+    }
+
+
+def official_news(
+    event_id: str,
+    *,
+    source_type: str = "announcement",
+    permission_tags: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "schema_version": "v1",
+        "event_id": event_id,
+        "tick_id": "2024-01-02T14:02:00+08:00",
+        "trace_id": "trace_abc",
+        "producer": "chronos",
+        "visibility": "public",
+        "created_at": "2024-01-02T14:02:00+08:00",
+        "symbol": "demo_stock",
+        "fact_time": "2024-01-02T14:00:00+08:00",
+        "source_type": source_type,
+        "source_name": "exchange",
+        "fact_id": f"fact_{event_id}",
+        "title": f"Official fact {event_id}",
+        "summary": "Released official summary.",
+        "confidence": "official",
+        "permission_tags": ["hot_money"] if permission_tags is None else permission_tags,
     }
 
 
@@ -230,6 +266,98 @@ class RoutingTests(unittest.TestCase):
             [item["event_id"] for item in router.replay_for_subscriber(Channel.ACCOUNT_SNAPSHOT, agent_b)],
             ["acct_b"],
         )
+
+    def test_official_news_scope_filters_source_types_per_agent(self) -> None:
+        router = ChannelRouter(session_id="sim_001")
+        router.register_agent_permissions(
+            agent_profile(
+                "narrow",
+                subscriptions=["Official_News"],
+                official_news_scope=["announcement"],
+            )
+        )
+        router.register_agent_permissions(
+            agent_profile(
+                "wide",
+                subscriptions=["Official_News"],
+                official_news_scope=["announcement", "news"],
+            )
+        )
+
+        router.publish(Channel.OFFICIAL_NEWS, official_news("news_announcement"))
+        router.publish(Channel.OFFICIAL_NEWS, official_news("news_wire", source_type="news"))
+
+        narrow_inputs = router.build_agent_input_events("narrow")["Official_News"]
+        wide_inputs = router.build_agent_input_events("wide")["Official_News"]
+
+        self.assertEqual([item["event_id"] for item in narrow_inputs], ["news_announcement"])
+        self.assertEqual(
+            [item["event_id"] for item in wide_inputs],
+            ["news_announcement", "news_wire"],
+        )
+
+    def test_official_news_permission_tags_filter_by_agent_type(self) -> None:
+        router = ChannelRouter(session_id="sim_001")
+        router.register_agent_permissions(
+            agent_profile(
+                "retail_a",
+                subscriptions=["Official_News"],
+                agent_type="retail",
+                official_news_scope=["announcement", "news"],
+            )
+        )
+        router.register_agent_permissions(
+            agent_profile(
+                "hot_money_a",
+                subscriptions=["Official_News"],
+                agent_type="hot_money",
+                official_news_scope=["announcement", "news"],
+            )
+        )
+
+        router.publish(
+            Channel.OFFICIAL_NEWS,
+            official_news("news_hot_money_only", permission_tags=["hot_money"]),
+        )
+        router.publish(
+            Channel.OFFICIAL_NEWS,
+            official_news("news_retail_only", permission_tags=["retail"]),
+        )
+
+        self.assertEqual(
+            [
+                item["event_id"]
+                for item in router.build_agent_input_events("retail_a")["Official_News"]
+            ],
+            ["news_retail_only"],
+        )
+        self.assertEqual(
+            [
+                item["event_id"]
+                for item in router.build_agent_input_events("hot_money_a")["Official_News"]
+            ],
+            ["news_hot_money_only"],
+        )
+
+    def test_empty_official_news_scope_blocks_official_news(self) -> None:
+        router = ChannelRouter(session_id="sim_001")
+        router.register_agent_permissions(
+            agent_profile(
+                "hot_money_a",
+                subscriptions=["Official_News"],
+                official_news_scope=[],
+            )
+        )
+        subscriber = SubscriberRef(
+            subscriber_id="hot_money_a",
+            role=SubscriberRole.AGENT_RUNTIME,
+            agent_id="hot_money_a",
+        )
+
+        router.publish(Channel.OFFICIAL_NEWS, official_news("news_hidden"))
+
+        self.assertEqual(router.build_agent_input_events("hot_money_a")["Official_News"], [])
+        self.assertEqual(router.replay_for_subscriber(Channel.OFFICIAL_NEWS, subscriber), [])
 
 
 if __name__ == "__main__":
