@@ -19,5 +19,6 @@ vite-dev*.log
 !.env.example
 AGENTS.md
 CLAUDE.md
-start claude.bat
+start claude.sh
 start cx.bat
+pytest**
