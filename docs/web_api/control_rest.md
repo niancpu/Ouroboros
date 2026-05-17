@@ -91,8 +91,9 @@ POST /api/v1/sessions
 
 约束：
 
-- 创建会话只初始化控制面，不自动推进 Tick。
-- 初始资金、持仓和 LOB 仍由 Layer 3 初始化。
+- 创建会话只初始化控制面会话元数据，不自动推进 Tick。
+- 创建会话不得构建 Chronos 初始市场种子，不得调用 Layer 3 初始化资金、持仓或 LOB，也不得发布第一份 `Market_Price`。
+- 初始资金、持仓和 LOB 只能在 `/start` 或 `/step` 从 `created` 状态首次进入运行前的初始化屏障中由 Layer 3 初始化。
 
 ## 获取会话
 
@@ -163,8 +164,6 @@ POST /api/v1/sessions/{session_id}/start
   }
 }
 ```
-
-说明：REST `/events` 返回完整 Web API event envelope，字段与 [realtime_ws.md](realtime_ws.md) 的服务端事件信封一致；示例 payload 可为空对象，但事件信封字段不得省略。
 
 约束：
 
@@ -334,7 +333,12 @@ GET /api/v1/sessions/{session_id}/events?from_seq=1000&limit=500
       {
         "seq": 1001,
         "type": "market.price",
+        "schema_version": "v1",
+        "session_id": "sim_001",
         "tick_id": "2024-01-02T14:02:00+08:00",
+        "trace_id": "trace_abc",
+        "server_time": "2024-01-02T14:02:01+08:00",
+        "visibility": "public",
         "payload": {}
       }
     ],
@@ -346,6 +350,7 @@ GET /api/v1/sessions/{session_id}/events?from_seq=1000&limit=500
 
 约束：
 
+- REST `/events` 返回完整 Web API event envelope，字段与 [realtime_ws.md](realtime_ws.md) 的服务端事件信封一致；示例 payload 可为空对象，但事件信封字段不得省略。
 - 只返回前端允许消费的事件。
 - 不返回 `Order_Input`、`UI_Audit`、Agent 原始 payload。
 - 不返回内部 Redis 原始消息、内部 channel payload、私有 `thought`、Prompt 或私有记忆。

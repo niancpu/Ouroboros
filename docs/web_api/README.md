@@ -102,7 +102,7 @@ WebSocket 入口为 `GET /api/v1/sessions/{session_id}/ws`。前端客户端消�
 - `tick_id` 是模拟时间，只能由 Meta-Orchestrator 推进。
 - `server_time` 是真实服务器时间。
 - `trace_id` 用于排错，不作为 Agent 输入。
-- Web API 响应和推送不得包含原始 `thought`、Prompt、私有记忆、Agent 原始 payload 或内部频道原始消息。
+- Web API 响应和推送不得包含原始 `thought`、`thought` 摘要、Prompt、私有记忆、Agent 原始 payload 或内部频道原始消息。
 
 REST 响应必须包含 `schema_version`、`request_id`、`trace_id`、`server_time`，并在请求已绑定会话时包含 `session_id`。`tick_id` 只在会话快照、事件回放或 Tick 相关响应中出现；创建会话前、鉴权失败、schema 失败等错误响应可以没有 `session_id` 和 `tick_id`。
 
@@ -119,7 +119,7 @@ REST 响应必须包含 `schema_version`、`request_id`、`trace_id`、`server_t
 | `audit.causal_chain` | UIAuditOfficer `Frontend_Causal_Chain` | `referee_publication_contract.md` |
 | `runtime.tick_state` | Meta-Orchestrator | `tick_lifecycle.md` |
 | `runtime.agent_lifecycle` | Meta-Orchestrator | `tick_lifecycle.md` |
-| `system.error` | Web API 层 | `visibility_and_errors.md` |
+| `system.error` | WebApiGateway / FrontendRealtimeGateway | `visibility_and_errors.md` |
 
 ## 版本策略
 

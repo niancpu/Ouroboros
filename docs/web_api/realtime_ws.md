@@ -163,7 +163,7 @@ Ack 确认：
 | `agent.account_snapshot` | `agent` | ClearingHouse | 前端审计视图用账户快照 |
 | `audit.graph` | `audit` | UIAuditOfficer | 前端拓扑图和脱敏解释 |
 | `audit.causal_chain` | `audit` | UIAuditOfficer | 前端因果链时间线 |
-| `system.error` | `runtime` | WebApiGateway | 可恢复或不可恢复错误 |
+| `system.error` | `runtime` | WebApiGateway / FrontendRealtimeGateway | 可恢复或不可恢复错误 |
 
 ## `runtime.tick_state`
 
@@ -386,7 +386,7 @@ Ack 确认：
 约束：
 
 - 不包含原始 `thought`、`thought` 摘要、Prompt、私有记忆或 Agent 原始 payload。
-- `public_reason` 必须是脱敏解释。
+- `public_reason` 必须是脱敏解释，且不得总结、改写或暗示任何 Agent 私有 `thought`。
 - `visibility=frontend_only` 的事件不得进入 Agent runtime。
 
 ## `audit.causal_chain`
@@ -467,7 +467,7 @@ Ack 确认：
 
 约束：
 
-- 只展示脱敏因果解释。
+- 只展示脱敏因果解释，不得把 Agent 私有 `thought` 摘要化后写入链路。
 - `public_text` 不得包含原始 `thought`、`thought` 摘要、Prompt、私有记忆或 Agent 原始 payload。
 - `event_ref` 只能引用可展示事件或前端专用审计事件。
 - `confidence` 表示审计官对链路强弱的估计，不是市场事实。
