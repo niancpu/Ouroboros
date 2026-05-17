@@ -122,6 +122,7 @@ export function Topology({
   const latestOnSelectAgentRef = useRef(onSelectAgent);
   const latestOnSelectReasonRef = useRef(onSelectReason);
   const refreshGraphicOverlayRef = useRef<() => void>(() => {});
+  const overlayTimerRef = useRef<number | null>(null);
   const [zoomLevel, setZoomLevel] = useState(1);
 
   const graphNodes: AuditGraphNode[] = graph.nodes.length
@@ -391,6 +392,16 @@ export function Topology({
     refreshGraphicOverlayRef.current = refreshGraphicOverlay;
   }, [refreshGraphicOverlay]);
 
+  const scheduleGraphicOverlay = useCallback(() => {
+    if (overlayTimerRef.current !== null) {
+      window.clearTimeout(overlayTimerRef.current);
+    }
+    overlayTimerRef.current = window.setTimeout(() => {
+      overlayTimerRef.current = null;
+      window.requestAnimationFrame(() => refreshGraphicOverlayRef.current());
+    }, 0);
+  }, []);
+
   useEffect(() => {
     const host = chartHostRef.current;
     if (!host) return;
@@ -424,7 +435,7 @@ export function Topology({
       }
     };
     const handleRoam = () => {
-      window.requestAnimationFrame(() => refreshGraphicOverlayRef.current());
+      scheduleGraphicOverlay();
     };
     chart.on("click", handleClick);
     chart.on("mouseover", handleMouseOver);
@@ -432,10 +443,14 @@ export function Topology({
     chart.on("graphRoam", handleRoam);
     const resizeObserver = new ResizeObserver(() => {
       chart.resize();
-      window.requestAnimationFrame(() => refreshGraphicOverlayRef.current());
+      scheduleGraphicOverlay();
     });
     resizeObserver.observe(host);
     return () => {
+      if (overlayTimerRef.current !== null) {
+        window.clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
       resizeObserver.disconnect();
       chart.off("click", handleClick);
       chart.off("mouseover", handleMouseOver);
@@ -444,14 +459,14 @@ export function Topology({
       chart.dispose();
       chartRef.current = null;
     };
-  }, []);
+  }, [scheduleGraphicOverlay]);
 
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || chart.isDisposed()) return;
     chart.setOption(option, { notMerge: true });
-    window.requestAnimationFrame(refreshGraphicOverlay);
-  }, [option, refreshGraphicOverlay]);
+    scheduleGraphicOverlay();
+  }, [option, scheduleGraphicOverlay]);
 
   const resetView = useCallback(() => {
     const chart = chartRef.current;
@@ -461,9 +476,9 @@ export function Topology({
       chart.setOption({
         series: [{ id: GRAPH_SERIES_ID, center: [50, 50], zoom: 1 }],
       });
-      window.requestAnimationFrame(refreshGraphicOverlay);
+      scheduleGraphicOverlay();
     }
-  }, [onSelectReason, refreshGraphicOverlay]);
+  }, [onSelectReason, scheduleGraphicOverlay]);
 
   const zoomBy = useCallback((direction: "in" | "out") => {
     setZoomLevel((current) => {
