@@ -1,0 +1,188 @@
+"""ASGI deployment adapter for the Ouroboros Web API.
+
+The app is intentionally thin: FastAPI owns HTTP/WebSocket transport only,
+while the framework-free ControlRestApi and SessionRunner keep protocol and
+runtime behavior in core code.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Mapping
+from typing import Any
+
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
+
+from Ouroboros.core.agents import AgentRuntime
+from Ouroboros.core.chronos import InMemoryChronosRepository
+from Ouroboros.core.orchestrator import SessionAgentSpec, SessionRunner
+from Ouroboros.core.schemas import SCHEMA_VERSION
+from Ouroboros.core.web_api.control_rest import ControlRestApi, RestHttpRequest
+from Ouroboros.core.web_api.realtime_ws import FrontendRealtimeGateway
+
+
+app = FastAPI(title="Ouroboros Web API")
+
+
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.api_route(
+    "/api/v1/{path:path}",
+    methods=["GET", "POST"],
+)
+async def control_rest(path: str, request: Request) -> JSONResponse:
+    body = await _json_body(request)
+    response = await asyncio.to_thread(
+        _control_api.handle,
+        RestHttpRequest(
+            method=request.method,
+            path=f"/api/v1/{path}",
+            headers=dict(request.headers),
+            body=body,
+            query=dict(request.query_params.multi_items()),
+        ),
+    )
+    _mirror_replay_events(response.body)
+    return JSONResponse(
+        status_code=response.status_code,
+        content=response.body,
+        headers=response.headers,
+    )
+
+
+@app.websocket("/api/v1/sessions/{session_id}/ws")
+async def session_ws(
+    websocket: WebSocket,
+    session_id: str,
+    client_id: str,
+    from_seq: int | None = None,
+) -> None:
+    await websocket.accept()
+    _realtime_gateway.connect(session_id, client_id, from_seq=from_seq)
+    try:
+        while True:
+            message = await websocket.receive_json()
+            responses = _realtime_gateway.handle_client_message(
+                session_id,
+                client_id,
+                message,
+            )
+            for response in responses:
+                await websocket.send_json(response.body)
+    except WebSocketDisconnect:
+        _realtime_gateway.disconnect(session_id, client_id)
+
+
+def _default_agent_specs() -> list[SessionAgentSpec]:
+    return [
+        SessionAgentSpec.from_dict(
+            {
+                "permission_profile": _permission_profile("retail_demo_a"),
+                "cash": 100_000.0,
+                "positions": {"demo_stock": 1_000},
+                "mark_prices": {"demo_stock": 10.0},
+            }
+        ),
+        SessionAgentSpec.from_dict(
+            {
+                "permission_profile": _permission_profile("retail_demo_b"),
+                "cash": 100_000.0,
+                "positions": {"demo_stock": 1_000},
+                "mark_prices": {"demo_stock": 10.0},
+            }
+        ),
+    ]
+
+
+def _permission_profile(agent_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "agent_id": agent_id,
+        "agent_type": "retail",
+        "subscriptions": [
+            "Official_News",
+            "Market_Price",
+            "Account_Snapshot:self",
+            "Forum_Rumors",
+        ],
+        "publish_permissions": {
+            "order_action": True,
+            "ui_audit": True,
+            "forum_post": False,
+        },
+        "official_news_scope": ["announcement", "news"],
+    }
+
+
+def _create_runner() -> SessionRunner:
+    return SessionRunner(
+        chronos_repository=InMemoryChronosRepository.from_dicts(
+            initial_market_seeds={
+                "demo_stock": {
+                    "schema_version": SCHEMA_VERSION,
+                    "seed_id": "seed_demo_stock",
+                    "symbol": "demo_stock",
+                    "previous_close": 10.0,
+                    "limit_up": 11.0,
+                    "limit_down": 9.0,
+                    "initial_l2_snapshot": {
+                        "bids": [["9.99", 1000], ["9.98", 1200]],
+                        "asks": [["10.01", 1000], ["10.02", 1200]],
+                    },
+                }
+            },
+        ),
+        agent_profile_sets={"default_24": _default_agent_specs()},
+        agent_runtime=AgentRuntime(
+            default_actions={
+                "retail_demo_a": {"action_type": "hold"},
+                "retail_demo_b": {"action_type": "hold"},
+            }
+        ),
+    )
+
+
+_runner = _create_runner()
+_control_api = ControlRestApi(control_plane=_runner)
+_realtime_gateway = FrontendRealtimeGateway()
+_mirrored_seq_by_session: dict[str, int] = {}
+
+
+async def _json_body(request: Request) -> Mapping[str, Any] | None:
+    if request.method.upper() == "GET":
+        return None
+    raw = await request.body()
+    if not raw:
+        return {}
+    data = await request.json()
+    if isinstance(data, Mapping):
+        return data
+    return {"_invalid_body": data}
+
+
+def _mirror_replay_events(body: Mapping[str, Any]) -> None:
+    data = body.get("data")
+    if not isinstance(data, Mapping):
+        return
+    session_id = data.get("session_id") or body.get("session_id")
+    if not isinstance(session_id, str):
+        return
+    from_seq = _mirrored_seq_by_session.get(session_id, 0)
+    try:
+        events = _runner.get_frontend_events(
+            session_id,
+            from_seq=from_seq,
+            limit=500,
+            request_id="req_ws_mirror",
+            trace_id=str(body.get("trace_id") or "trace_ws_mirror"),
+        )["events"]
+    except Exception:
+        return
+    for event in events:
+        _realtime_gateway.publish_event(session_id, event)
+    if events:
+        _mirrored_seq_by_session[session_id] = int(events[-1]["seq"])
