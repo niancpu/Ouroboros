@@ -22,4 +22,4 @@
 
 ## 当前状态
 
-当前仓库尚未包含 `frontend/` 代码目录，前端设计文档暂归档在 `docs/frontend`。创建前端工程后，可在 `frontend/docs` 建立实现侧文档，但不得复制一份脱离 `docs/web_api` 的协议定义。
+前端工程位于 `Ouroboros/frontend`。前端设计文档仍归档在 `docs/frontend`；实现侧文档只放在 `Ouroboros/frontend/docs`，不得复制一份脱离 `docs/web_api` 的协议定义。

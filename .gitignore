@@ -5,6 +5,10 @@ build/
 dist/
 wheels/
 *.egg-info
+node_modules/
+Ouroboros/frontend/dist/
+*.tsbuildinfo
+vite-dev*.log
 
 # Virtual environments
 .venv
