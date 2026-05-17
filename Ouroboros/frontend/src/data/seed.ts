@@ -26,6 +26,7 @@ export const seedState = {
   },
   market: demoSeed.snapshot.market,
   agents,
+  auditGraph: demoSeed.snapshot.audit_graph,
   events: demoSeed.eventsPage.events as WebEventEnvelope[],
   causalChains: demoSeed.audit.causalChains,
   priceSeries: [14.88, 15.02, 15.08, 15.2, 15.16, 15.28],

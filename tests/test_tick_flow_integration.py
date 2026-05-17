@@ -268,7 +268,7 @@ def split_agent_payload(
 
 
 def timeout_default_hold(context: TickContext) -> AgentPayload:
-    return AgentRuntime().act(context)
+    return AgentRuntime(default_actions={context.agent_id: {"action_type": "hold"}}).act(context)
 
 
 def ws_event(seq: int, event_type: str, payload: Mapping[str, object]) -> dict[str, object]:

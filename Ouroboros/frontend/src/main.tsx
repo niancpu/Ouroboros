@@ -1,9 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, Network, Play, Square, StepForward } from "lucide-react";
+import { Activity, Crosshair, Eye, Network, Play, RotateCcw, Square, StepForward } from "lucide-react";
 import "./styles/global.css";
 import { seedState } from "./data/seed";
 import type { AgentSnapshot, CausalChain, MarketSnapshot, SessionStatus, WebEventEnvelope } from "./types/webApi";
+import type { AuditGraphEdge, AuditGraphNode } from "./types/api";
 
 type ModuleKey = "CONFIG" | "LIVE" | "ENTITY" | "CHRONOS" | "DOSSIER";
 
@@ -123,6 +124,7 @@ function App() {
   const [events, setEvents] = useState<WebEventEnvelope[]>(seedState.events);
   const [selectedAgentId, setSelectedAgentId] = useState(seedState.agents[1]?.agent_id ?? "");
   const [connectionState, setConnectionState] = useState("DEMO_OFFLINE");
+  const [pageState, setPageState] = useState<VisualState>("live");
 
   const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId) ?? agents[0];
 
@@ -144,11 +146,17 @@ function App() {
             session={session}
             market={market}
             agents={agents}
+            graph={seedState.auditGraph}
             events={events}
             connectionState={connectionState}
+            pageState={pageState}
+            selectedAgentId={selectedAgentId}
+            onSelectAgent={setSelectedAgentId}
+            onStateChange={setPageState}
             onControl={(status) => {
               setSession((current) => ({ ...current, status }));
               setConnectionState(`CONTROL_${String(status).toUpperCase()}`);
+              setPageState(status === "paused" ? "paused" : status === "running" ? "live" : "terminal");
             }}
           />
         )}
@@ -182,6 +190,8 @@ function App() {
     </div>
   );
 }
+
+type VisualState = "empty" | "loading" | "live" | "paused" | "recovering" | "error" | "terminal" | "replay";
 
 function useState<T>(initialValue: T): [T, (next: T | ((current: T) => T)) => void] {
   return React.useState(initialValue);
@@ -253,6 +263,7 @@ function ConfigurationMatrix({
     tickInterval: "5 分钟",
   });
   const [profiles, setProfiles] = useState(seedState.agentProfiles);
+  const hasLocalProfileDraft = JSON.stringify(profiles) !== JSON.stringify(seedState.agentProfiles);
 
   function updateField(field: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -326,6 +337,12 @@ function ConfigurationMatrix({
         </div>
       </section>
 
+      {hasLocalProfileDraft && (
+        <div className="local-profile-warning" role="status">
+          LOCAL PROFILE PREVIEW ONLY // SUBMIT USES agent_profile_set=default_24
+        </div>
+      )}
+
       <button
         className="primary-command"
         type="button"
@@ -384,28 +401,48 @@ function LiveTelemetryCanvas({
   session,
   market,
   agents,
+  graph,
   events,
   connectionState,
+  pageState,
+  selectedAgentId,
+  onSelectAgent,
+  onStateChange,
   onControl,
 }: {
   session: typeof seedState.session;
   market: MarketSnapshot;
   agents: AgentSnapshot[];
+  graph: typeof seedState.auditGraph;
   events: WebEventEnvelope[];
   connectionState: string;
+  pageState: VisualState;
+  selectedAgentId: string;
+  onSelectAgent: (agentId: string) => void;
+  onStateChange: (state: VisualState) => void;
   onControl: (status: SessionStatus) => void;
 }) {
+  const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
+  const [selectedReasonRef, setSelectedReasonRef] = useState<string | null>(null);
+  const [edgeMode, setEdgeMode] = useState<"current" | "selected" | "strong">("current");
+  const [scrubIndex, setScrubIndex] = useState(seedState.chronos.ticks.indexOf(session.current_tick_id));
   const feedEvents = events.filter((event) =>
     ["runtime.tick_state", "market.tape_alert", "forum.post", "system.error"].includes(event.type),
   );
+  const safeScrubIndex = Math.max(0, scrubIndex);
+  const displayTick = seedState.chronos.ticks[safeScrubIndex] ?? session.current_tick_id;
+  const stateLabel = pageState === "recovering" ? "RECOVERING SNAPSHOT" : pageState === "replay" ? "REPLAY TICK" : labelFrom(sessionStatusLabels, session.status);
+  const selectedAgent = agents.find((agent) => agent.agent_id === selectedAgentId);
+  const selectedNode = graph.nodes.find((node) => node.agent_id === selectedAgentId);
+  const selectedEdges = graph.edges.filter((edge) => edge.source === selectedAgentId || edge.target === selectedAgentId);
 
   return (
-    <section className="live-page">
-      <header className="terminal-header">
+    <section className={`live-page state-${pageState}`}>
+      <header className="terminal-header live-terminal-header">
         <span>Ouroboros 实时推演</span>
         <span>会话 {displaySession(session.session_id)}</span>
-        <span>节拍 {formatTick(session.current_tick_id)}</span>
-        <span>{labelFrom(sessionStatusLabels, session.status)}</span>
+        <span>节拍 {formatTick(displayTick)}</span>
+        <span>{stateLabel}</span>
         <span>{labelFrom(connectionLabels, connectionState)}</span>
         <div className="control-buttons">
           <IconButton label="开始" onClick={() => onControl("running")}>
@@ -417,13 +454,19 @@ function LiveTelemetryCanvas({
           <IconButton label="单步推进" onClick={() => onControl("running")}>
             <StepForward size={16} />
           </IconButton>
+          <IconButton label="恢复快照" onClick={() => onStateChange("recovering")}>
+            <RotateCcw size={16} />
+          </IconButton>
         </div>
       </header>
       <div className="live-columns">
         <aside className="chronos-feed">
           <h2>时间轴事件流</h2>
           {feedEvents.map((event) => (
-            <article key={`${event.seq}-${event.type}`}>
+            <article
+              className={event.trace_id === selectedReasonRef || readPayloadField(event, "post_id", "") === selectedReasonRef ? "sync-highlight" : ""}
+              key={`${event.seq}-${event.type}`}
+            >
               <time>{formatTick(event.tick_id)}</time>
               <strong>{labelFrom(eventTypeLabels, event.type)}</strong>
               <p>{eventText(event)}</p>
@@ -431,10 +474,60 @@ function LiveTelemetryCanvas({
           ))}
         </aside>
         <section className="canvas-stack">
-          <Topology agents={agents} />
+          <Topology
+            agents={agents}
+            graph={graph}
+            edgeMode={edgeMode}
+            hoveredAgentId={hoveredAgentId}
+            selectedAgentId={selectedAgentId}
+            selectedReasonRef={selectedReasonRef}
+            tickId={displayTick}
+            onHoverAgent={setHoveredAgentId}
+            onSelectAgent={onSelectAgent}
+            onSelectReason={setSelectedReasonRef}
+            onEdgeModeChange={setEdgeMode}
+          />
+          <TickScrubber
+            currentIndex={safeScrubIndex}
+            ticks={seedState.chronos.ticks}
+            onChange={(index) => {
+              setScrubIndex(index);
+              onStateChange(index === seedState.chronos.ticks.indexOf(session.current_tick_id) ? "live" : "replay");
+            }}
+          />
           <MarketCurves market={market} events={events} />
         </section>
-        <aside className="order-book">
+        <aside className="order-book inspector-book">
+          <section className="agent-inspector">
+            <h2>Inspector</h2>
+            {selectedAgent && selectedNode ? (
+              <div className="inspector-grid">
+                <span>agent_id</span>
+                <strong>{selectedAgent.agent_id}</strong>
+                <span>type</span>
+                <strong>{labelFrom(agentTypeLabels, selectedAgent.agent_type)}</strong>
+                <span>risk</span>
+                <strong>{labelFrom(riskStateLabels, selectedAgent.risk_state)}</strong>
+                <span>belief</span>
+                <strong>{selectedNode.belief_score.toFixed(2)}</strong>
+                <span>position</span>
+                <strong>{formatPercent(positionExposure(selectedNode, graph.nodes))}</strong>
+              </div>
+            ) : (
+              <EmptyState label="NO AGENT SELECTED" />
+            )}
+            <div className="chain-list">
+              {selectedEdges.length ? (
+                selectedEdges.map((edge) => (
+                  <button type="button" key={edge.reason_ref} onClick={() => setSelectedReasonRef(edge.reason_ref)}>
+                    {edge.reason_ref} W:{edge.weight.toFixed(2)}
+                  </button>
+                ))
+              ) : (
+                <span>NO PUBLIC CAUSAL CHAIN</span>
+              )}
+            </div>
+          </section>
           <h2>盘口</h2>
           <BookSide title="卖盘" rows={market.level2.asks} side="sell" />
           <BookSide title="买盘" rows={market.level2.bids} side="buy" />
@@ -452,47 +545,181 @@ function IconButton({ label, onClick, children }: { label: string; onClick: () =
   );
 }
 
-function Topology({ agents }: { agents: AgentSnapshot[] }) {
-  const nodes = agents.slice(0, 8).map((agent, index) => {
-    const x = 12 + (index % 4) * 26;
-    const y = 25 + Math.floor(index / 4) * 38;
-    return { ...agent, x, y };
+function Topology({
+  agents,
+  graph,
+  edgeMode,
+  hoveredAgentId,
+  selectedAgentId,
+  selectedReasonRef,
+  tickId,
+  onHoverAgent,
+  onSelectAgent,
+  onSelectReason,
+  onEdgeModeChange,
+}: {
+  agents: AgentSnapshot[];
+  graph: typeof seedState.auditGraph;
+  edgeMode: "current" | "selected" | "strong";
+  hoveredAgentId: string | null;
+  selectedAgentId: string;
+  selectedReasonRef: string | null;
+  tickId: string;
+  onHoverAgent: (agentId: string | null) => void;
+  onSelectAgent: (agentId: string) => void;
+  onSelectReason: (reasonRef: string | null) => void;
+  onEdgeModeChange: (mode: "current" | "selected" | "strong") => void;
+}) {
+  const graphNodes = graph.nodes.length ? graph.nodes : agents.map(agentToGraphNode);
+  const nodes = graphNodes.map((node, index) => {
+    const point = deterministicNodePoint(index, graphNodes.length);
+    return { ...node, ...point };
   });
+  const nodeById = new Map(nodes.map((node) => [node.agent_id, node]));
+  const visibleEdges = pruneGraphEdges(graph.edges, selectedAgentId, edgeMode);
+  const spotlightIds = hoveredAgentId
+    ? new Set([
+        hoveredAgentId,
+        ...graph.edges.filter((edge) => edge.source === hoveredAgentId || edge.target === hoveredAgentId).flatMap((edge) => [edge.source, edge.target]),
+      ])
+    : null;
 
   return (
     <div className="topology panel">
       <div className="section-title">
         <Network size={16} />
         <span>共识感染画布</span>
+        <div className="canvas-tools">
+          <button type="button" onClick={() => onEdgeModeChange("current")}>
+            <Eye size={14} /> 当前 Tick
+          </button>
+          <button type="button" onClick={() => onEdgeModeChange("selected")}>
+            <Crosshair size={14} /> 选中链路
+          </button>
+          <button type="button" onClick={() => onEdgeModeChange("strong")}>
+            <Network size={14} /> 高影响
+          </button>
+          <button type="button" onClick={() => onSelectReason(null)}>
+            <RotateCcw size={14} /> 重置视图
+          </button>
+        </div>
       </div>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-        {nodes.slice(0, -1).map((node, index) => (
-          <path
-            key={`${node.agent_id}-${nodes[index + 1].agent_id}`}
-            d={`M ${node.x} ${node.y} C ${node.x + 12} ${node.y - 16}, ${nodes[index + 1].x - 12} ${nodes[index + 1].y + 16}, ${nodes[index + 1].x} ${nodes[index + 1].y}`}
-            fill="none"
-            stroke={index % 2 ? "#000" : "#002fa7"}
-            strokeDasharray={index % 3 === 0 ? "5 3" : undefined}
-            strokeWidth="0.6"
-          />
-        ))}
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="共识感染拓扑图">
+        <defs>
+          <pattern id="engineering-grid" width="10" height="10" patternUnits="userSpaceOnUse">
+            <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#000" strokeOpacity="0.05" strokeWidth="0.5" />
+          </pattern>
+          <marker id="sharp-arrow" viewBox="0 0 6 6" refX="5.5" refY="3" markerWidth="4" markerHeight="4" orient="auto">
+            <path d="M 0 0 L 6 3 L 0 6 Z" fill="#000" />
+          </marker>
+          <clipPath id="belief-top-circle">
+            <rect x="-12" y="-12" width="24" height="12" />
+          </clipPath>
+        </defs>
+        <rect x="0" y="0" width="100" height="100" fill="url(#engineering-grid)" />
+        <text x="2" y="5" fontSize="2.3" fill="#000">
+          X:-240.50 Y:112.00 // SCALE 1:1
+        </text>
+        <text x="66" y="96" fontSize="2.3" fill="#000">
+          TICK {formatTick(tickId)}
+        </text>
+        {visibleEdges.map((edge, index) => {
+          const source = nodeById.get(edge.source);
+          const target = nodeById.get(edge.target);
+          if (!source || !target) return null;
+          const isDimmed = spotlightIds ? !spotlightIds.has(edge.source) && !spotlightIds.has(edge.target) : false;
+          const isSelected = edge.reason_ref === selectedReasonRef;
+          return (
+            <path
+              className={isDimmed ? "graph-dimmed" : ""}
+              key={`${edge.source}-${edge.target}-${edge.reason_ref}`}
+              d={bezierPath(source, target)}
+              fill="none"
+              markerEnd="url(#sharp-arrow)"
+              onClick={() => onSelectReason(edge.reason_ref)}
+              stroke={isSelected || index % 2 === 0 ? "#002fa7" : "#000"}
+              strokeDasharray={edge.weight < 0.3 ? "1 2" : index % 3 === 0 ? "4 3" : undefined}
+              strokeWidth="0.5"
+            >
+              <title>{edge.public_reason} W:{edge.weight.toFixed(2)}</title>
+            </path>
+          );
+        })}
         {nodes.map((node) => (
-          <g key={node.agent_id}>
-            <circle
-              cx={node.x}
-              cy={node.y}
-              r="3.8"
-              fill={node.risk_state === "margin_call" ? "#002fa7" : "#fff"}
-              stroke={node.risk_state === "warning" ? "#002fa7" : "#000"}
-              strokeWidth="0.8"
-            />
-            <line x1={node.x + 4} y1={node.y} x2={node.x + 10} y2={node.y - 5} stroke="#000" strokeWidth="0.4" />
-            <text x={node.x + 11} y={node.y - 6} fontSize="2.6" fill="#000">
-              [{displayAgentName(node.agent_id)}] {labelFrom(lifecycleStateLabels, node.lifecycle_state)}
+          <g
+            className={spotlightIds && !spotlightIds.has(node.agent_id) ? "graph-dimmed" : ""}
+            key={node.agent_id}
+            onClick={() => onSelectAgent(node.agent_id)}
+            onMouseEnter={() => onHoverAgent(node.agent_id)}
+            onMouseLeave={() => onHoverAgent(null)}
+          >
+            {node.agent_id === selectedAgentId && <rect x={node.x - 6} y={node.y - 6} width="12" height="12" fill="none" stroke="#000" strokeDasharray="1.4 1.4" strokeWidth="0.5" />}
+            <NodeGlyph node={node} allNodes={graphNodes} shape={node.agent_id === "retail_b" ? "square" : "circle"} />
+            <line x1={node.x + 4.8} y1={node.y} x2={node.x + 11} y2={node.y} stroke="#000" strokeWidth="0.35" />
+            <text x={node.x + 11.5} y={node.y + 0.8} fontSize="2.2" fill="#000">
+              [{formatAgentCode(node.agent_id)}] C:{node.belief_score.toFixed(2)} P:{formatPercent(positionExposure(node, graphNodes))}
             </text>
+            <title>
+              {node.agent_id} / {labelFrom(agentTypeLabels, node.agent_type)} / {labelFrom(riskStateLabels, node.risk_state)} / belief {node.belief_score.toFixed(2)} / position {formatPercent(positionExposure(node, graphNodes))}
+            </title>
           </g>
         ))}
       </svg>
+    </div>
+  );
+}
+
+function NodeGlyph({
+  node,
+  allNodes,
+  shape,
+}: {
+  node: AuditGraphNode & { x: number; y: number };
+  allNodes: AuditGraphNode[];
+  shape: "circle" | "square";
+}) {
+  const fillHeight = Math.max(0, Math.min(1, Math.abs(node.belief_score - 0.5) * 2)) * 5;
+  const beliefFill = node.belief_score > 0.6 ? "#002fa7" : node.belief_score < 0.4 ? "#000" : "#fff";
+  const exposure = positionExposure(node, allNodes);
+  if (shape === "square") {
+    return (
+      <>
+        <rect x={node.x - 4.2} y={node.y - 4.2} width="8.4" height="8.4" fill="#fff" stroke={node.risk_state === "warning" ? "#002fa7" : "#000"} strokeWidth="0.6" />
+        <rect x={node.x - 4.2} y={node.y - 4.2} width="8.4" height={fillHeight} fill={beliefFill} />
+        <line x1={node.x - 3.4} y1={node.y + 3.5} x2={node.x - 3.4 + exposure * 6.8} y2={node.y + 3.5} stroke="#000" strokeWidth="0.7" />
+      </>
+    );
+  }
+  return (
+    <>
+      <circle cx={node.x} cy={node.y} r="4.4" fill="#fff" stroke={node.risk_state === "warning" ? "#002fa7" : "#000"} strokeWidth="0.6" />
+      <g transform={`translate(${node.x} ${node.y})`} clipPath="url(#belief-top-circle)">
+        <circle cx="0" cy="0" r="4.4" fill={beliefFill} />
+      </g>
+      <line x1={node.x - 3.3} y1={node.y + 3.5} x2={node.x - 3.3 + exposure * 6.6} y2={node.y + 3.5} stroke="#000" strokeWidth="0.7" />
+    </>
+  );
+}
+
+function TickScrubber({ ticks, currentIndex, onChange }: { ticks: string[]; currentIndex: number; onChange: (index: number) => void }) {
+  return (
+    <div className="tick-scrubber">
+      <input
+        aria-label="Tick 时间刮擦器"
+        max={Math.max(ticks.length - 1, 0)}
+        min={0}
+        onChange={(event) => onChange(Number(event.target.value))}
+        step={1}
+        type="range"
+        value={currentIndex}
+      />
+      <div className="tick-marks">
+        {ticks.map((tick, index) => (
+          <span className={index === currentIndex ? "active" : ""} key={tick}>
+            T{index}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -545,6 +772,10 @@ function BookSide({ title, rows, side }: { title: string; rows: [string, number]
       ))}
     </section>
   );
+}
+
+function EmptyState({ label }: { label: string }) {
+  return <div className="empty-state">{label}</div>;
 }
 
 function EntityInspector({
@@ -643,6 +874,7 @@ function ChronosScriptEditor({
     <section className="chronos-page">
       <header className="terminal-header">
         <span>时间轴剧本管理</span>
+        <span>READ ONLY TIMELINE</span>
         <span>{displaySession(session.session_id)}</span>
         <span>{formatTick(currentTickId)}</span>
       </header>
@@ -690,11 +922,12 @@ function VulnerabilityDossier({
   dossier: typeof seedState.dossier;
 }) {
   const rankedAgents = [...agents].sort((a, b) => b.equity - a.equity).slice(0, 6);
+  const collapseProbability = typeof dossier.collapseProbability === "number" ? `${dossier.collapseProbability}%` : "N/A";
 
   return (
     <section className="dossier-page">
       <header className="dossier-header">
-        <h1>崩塌概率：{dossier.collapseProbability}%</h1>
+        <h1>崩塌概率：{collapseProbability}</h1>
         <div>
           <span>会话 {displaySession(session.session_id)}</span>
           <span>标的 {displaySymbol(market.symbol)}</span>
@@ -785,6 +1018,13 @@ function displayAgentName(agentId: string): string {
   return labelFrom(agentNameLabels, agentId);
 }
 
+function formatAgentCode(agentId: string): string {
+  const knownIndex = seedState.agents.findIndex((agent) => agent.agent_id === agentId);
+  if (knownIndex >= 0) return `AGT-${String(knownIndex + 1).padStart(2, "0")}`;
+  const hash = [...agentId].reduce((total, char) => total + char.charCodeAt(0), 0);
+  return `AGT-${String((hash % 99) + 1).padStart(2, "0")}`;
+}
+
 function displaySymbol(symbol: string): string {
   return labelFrom(symbolLabels, symbol);
 }
@@ -801,6 +1041,48 @@ function formatAccountValue(label: string, value: unknown): string {
   if (typeof value === "number") return value.toLocaleString("en-US");
   if (label === "risk_state" && typeof value === "string") return labelFrom(riskStateLabels, value);
   return String(value);
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function agentToGraphNode(agent: AgentSnapshot): AuditGraphNode {
+  const maxEquity = Math.max(...seedState.agents.map((item) => item.equity), 1);
+  return {
+    agent_id: agent.agent_id,
+    agent_type: agent.agent_type,
+    belief_score: Math.max(0, Math.min(1, agent.equity / maxEquity)),
+    position_value: agent.position_value,
+    risk_state: agent.risk_state,
+  };
+}
+
+function deterministicNodePoint(index: number, total: number) {
+  const radiusX = 33;
+  const radiusY = 26;
+  const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(total, 1);
+  return {
+    x: 50 + Math.cos(angle) * radiusX,
+    y: 50 + Math.sin(angle) * radiusY,
+  };
+}
+
+function pruneGraphEdges(edges: AuditGraphEdge[], selectedAgentId: string, edgeMode: "current" | "selected" | "strong") {
+  const selectedEdges = edges.filter((edge) => edge.source === selectedAgentId || edge.target === selectedAgentId);
+  const strongEdges = edges.filter((edge) => edge.weight >= 0.3);
+  const source = edgeMode === "selected" ? selectedEdges : edgeMode === "strong" ? strongEdges : strongEdges.length ? strongEdges : edges;
+  return [...source].sort((a, b) => b.weight - a.weight).slice(0, 48);
+}
+
+function positionExposure(node: AuditGraphNode, allNodes: AuditGraphNode[]) {
+  const maxPosition = Math.max(...allNodes.map((item) => item.position_value), 1);
+  return Math.max(0, Math.min(1, node.position_value / maxPosition));
+}
+
+function bezierPath(source: { x: number; y: number }, target: { x: number; y: number }) {
+  const dx = target.x - source.x;
+  return `M ${source.x} ${source.y} C ${source.x + dx * 0.45} ${source.y}, ${target.x - dx * 0.45} ${target.y}, ${target.x} ${target.y}`;
 }
 
 function readPayloadField<TFallback extends string | number>(

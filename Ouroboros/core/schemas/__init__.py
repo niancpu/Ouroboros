@@ -53,9 +53,11 @@ from .common import (
     map_internal_visibility_to_web,
 )
 from .control import (
+    AgentResults,
     AgentStepCommand,
     CreateSessionCommand,
     CreateSessionResult,
+    RouteRef,
     RunTickCommand,
     RunTickResult,
     RuntimeTickStateEvent,
@@ -102,6 +104,7 @@ __all__ = [
     "AgentPayload",
     "AgentProfile",
     "AgentProfileSet",
+    "AgentResults",
     "AgentStepCommand",
     "AgentType",
     "AuditGraphEvent",
@@ -144,6 +147,7 @@ __all__ = [
     "ReleaseFactsResult",
     "RestErrorResponse",
     "RestSuccessResponse",
+    "RouteRef",
     "RiskResult",
     "RiskState",
     "RunMode",

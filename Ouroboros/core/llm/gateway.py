@@ -11,6 +11,8 @@ import json
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from Ouroboros.core.llm.config import LLMConfig
 from Ouroboros.core.schemas import LLMRequest, SCHEMA_VERSION, SchemaValidationError
@@ -58,10 +60,12 @@ class LLMGateway:
         self._used_in_window = 0
 
     def complete(self, agent_prompt: LLMRequest | Mapping[str, Any]) -> dict[str, Any]:
-        """Return one schema-shaped mock completion for exactly one request."""
+        """Return one schema-shaped completion for exactly one request."""
 
         request = self._coerce_request(agent_prompt)
         self._consume_rate_limit()
+        if self._should_call_provider():
+            return self._complete_openai_compatible(request)
         return self.precheck_structured_output(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -138,6 +142,65 @@ class LLMGateway:
         if self._used_in_window >= self._max_requests:
             raise SchemaValidationError("rate_limited")
         self._used_in_window += 1
+
+    def _should_call_provider(self) -> bool:
+        return (
+            self._provider_name == "openai_compatible"
+            and bool(self.config.api_key)
+            and bool(self.config.base_url)
+        )
+
+    def _complete_openai_compatible(self, request: LLMRequest) -> dict[str, Any]:
+        endpoint = self.config.base_url.rstrip("/") + "/chat/completions"
+        body = {
+            "model": self.config.model,
+            "messages": [message.__dict__ for message in request.messages],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        }
+        http_request = Request(
+            endpoint,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(http_request, timeout=request.deadline_ms / 1000) as response:
+                raw_body = response.read().decode("utf-8")
+        except HTTPError as exc:
+            raise SchemaValidationError(f"llm_provider_error:{exc.code}") from exc
+        except URLError as exc:
+            raise SchemaValidationError("llm_provider_error") from exc
+        except TimeoutError as exc:
+            raise SchemaValidationError("llm_provider_timeout") from exc
+
+        try:
+            provider_output = json.loads(raw_body)
+            content = provider_output["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise SchemaValidationError("llm_provider_invalid_response") from exc
+        if not isinstance(content, str) or not content.strip():
+            raise SchemaValidationError("llm_provider_invalid_response")
+
+        return self.precheck_structured_output(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "request_id": request.request_id,
+                "agent_id": request.agent_id,
+                "tick_id": request.tick_id,
+                "provider": self._provider_name,
+                "output_schema_ref": request.output_schema_ref,
+                "candidates": [
+                    {
+                        "content": content,
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        )
 
     def _coerce_request(self, value: LLMRequest | Mapping[str, Any]) -> LLMRequest:
         if isinstance(value, LLMRequest):

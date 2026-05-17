@@ -1,11 +1,13 @@
-"""Deterministic in-process mock AgentRuntime."""
+"""AgentRuntime boundary for turning TickContext into AgentPayload."""
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict, deque
 from dataclasses import replace
 from typing import Any, Iterable, Mapping
 
+from Ouroboros.core.llm import LLMGateway
 from Ouroboros.core.schemas import (
     AgentAction,
     AgentPayload,
@@ -24,10 +26,10 @@ ActionSpec = AgentAction | AgentPayload | Mapping[str, Any]
 
 
 class AgentRuntime:
-    """Deterministic mock runtime for Layer 1 agent tests.
+    """Layer 1 runtime that calls LLMGateway unless scripted test actions exist.
 
-    The runtime has no bus, LOB, ledger, or LLM dependencies. It only consumes
-    the supplied TickContext plus its per-agent private memory store.
+    The runtime has no bus, LOB, or ledger dependency. It only consumes the
+    supplied TickContext plus its per-agent private memory store.
     """
 
     def __init__(
@@ -36,27 +38,35 @@ class AgentRuntime:
         default_actions: Mapping[str, ActionSpec] | None = None,
         scripted_actions: Mapping[str, Iterable[ActionSpec]] | None = None,
         memory_namespaces: Mapping[str, str] | None = None,
+        llm_gateway: LLMGateway | None = None,
     ) -> None:
         self._default_actions = dict(default_actions or {})
         self._scripted_actions = {
             agent_id: deque(actions) for agent_id, actions in (scripted_actions or {}).items()
         }
+        self._llm_gateway = llm_gateway or LLMGateway()
         self._memory: dict[tuple[str, str], list[PrivateMemoryRef]] = defaultdict(list)
         self._namespace_owner: dict[str, str] = dict(
             (namespace, agent_id) for agent_id, namespace in (memory_namespaces or {}).items()
         )
         self._memory_sequence = 0
+        self._last_errors: dict[str, str] = {}
+
+    @property
+    def last_errors(self) -> Mapping[str, str]:
+        return dict(self._last_errors)
 
     def act(self, tick_context: TickContext | Mapping[str, Any]) -> AgentPayload:
         """Return a schema-valid AgentPayload for one TickContext."""
 
         context = self._coerce_tick_context(tick_context)
-        spec = self._next_action_spec(context.agent_id)
-        if spec is None:
-            return self._hold_payload(context)
-
         try:
-            payload = self._payload_from_spec(context, spec)
+            spec = self._next_action_spec(context.agent_id)
+            payload = (
+                self._payload_from_llm(context)
+                if spec is None
+                else self._payload_from_spec(context, spec)
+            )
         except (SchemaValidationError, ValueError, TypeError):
             return self._hold_payload(context)
 
@@ -136,6 +146,69 @@ class AgentRuntime:
         if "action" in spec:
             return AgentPayload.from_dict(spec)
         return self._payload_from_action(context, AgentAction.from_dict(spec))
+
+    def _payload_from_llm(self, context: TickContext) -> AgentPayload:
+        request = self._llm_request(context)
+        try:
+            output = self._llm_gateway.complete(request)
+            content = output["candidates"][0]["content"]
+            payload_data = json.loads(content)
+        except json.JSONDecodeError:
+            self._last_errors[context.agent_id] = "payload_parse_error"
+            return self._hold_payload(context)
+        except (KeyError, IndexError, TypeError) as exc:
+            self._last_errors[context.agent_id] = "payload_parse_error"
+            raise SchemaValidationError("payload_parse_error") from exc
+        except SchemaValidationError as exc:
+            message = str(exc)
+            if "content must be JSON" in message or "payload_parse_error" in message:
+                self._last_errors[context.agent_id] = "payload_parse_error"
+                return self._hold_payload(context)
+            self._last_errors[context.agent_id] = message or "llm_error"
+            return self._hold_payload(context)
+
+        if not isinstance(payload_data, Mapping):
+            self._last_errors[context.agent_id] = "payload_parse_error"
+            return self._hold_payload(context)
+
+        payload_data = dict(payload_data)
+        payload_data.setdefault("schema_version", SCHEMA_VERSION)
+        payload_data.setdefault("tick_id", context.tick_id)
+        payload_data.setdefault("trace_id", context.trace_id)
+        payload_data.setdefault("agent_id", context.agent_id)
+        try:
+            return AgentPayload.from_dict(payload_data)
+        except (SchemaValidationError, ValueError, TypeError) as exc:
+            self._last_errors[context.agent_id] = "payload_parse_error"
+            raise SchemaValidationError("payload_parse_error") from exc
+
+    def _llm_request(self, context: TickContext) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "request_id": f"llm_{_stable_id(context.agent_id)}_{_stable_id(context.tick_id)}",
+            "agent_id": context.agent_id,
+            "tick_id": context.tick_id,
+            "prompt_profile_id": str(
+                context.private_inputs.get("prompt_profile_id")
+                or context.public_inputs.get("prompt_profile_id")
+                or "runtime_default"
+            ),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return exactly one JSON object matching AgentPayload. "
+                        "Do not include settlement, cash mutation, or hidden fields."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(context.to_dict(), ensure_ascii=False, sort_keys=True),
+                },
+            ],
+            "output_schema_ref": "agent_payload.v1",
+            "deadline_ms": context.constraints.deadline_ms,
+        }
 
     def _payload_from_action(self, context: TickContext, action: AgentAction) -> AgentPayload:
         return AgentPayload(
@@ -233,3 +306,7 @@ class AgentRuntime:
         if isinstance(value, MemoryWriteRequest):
             return value
         return MemoryWriteRequest.from_dict(value)
+
+
+def _stable_id(value: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in value).strip("_") or "unknown"

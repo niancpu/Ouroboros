@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import json
 
 from Ouroboros.core.agents import AgentRuntime
 from Ouroboros.core.schemas import (
@@ -46,7 +47,7 @@ def tick_context(
 
 class AgentRuntimeMockTests(unittest.TestCase):
     def test_default_action_is_safe_hold_payload(self) -> None:
-        runtime = AgentRuntime()
+        runtime = AgentRuntime(default_actions={"agent_a": {"action_type": "hold"}})
 
         payload = runtime.act(tick_context("agent_a"))
 
@@ -239,7 +240,7 @@ class AgentRuntimeMockTests(unittest.TestCase):
             )
 
     def test_output_does_not_include_ui_audit_or_other_agent_private_fields(self) -> None:
-        runtime = AgentRuntime()
+        runtime = AgentRuntime(default_actions={"agent_a": {"action_type": "hold"}})
 
         payload = runtime.act(tick_context("agent_a"))
         payload_data = payload.to_dict()
@@ -295,6 +296,61 @@ class AgentRuntimeMockTests(unittest.TestCase):
                     "limit": 5,
                 }
             )
+
+    def test_llm_malformed_json_records_payload_parse_error_and_holds(self) -> None:
+        runtime = AgentRuntime(llm_gateway=MalformedGateway())
+
+        payload = runtime.act(tick_context("agent_a"))
+
+        self.assertEqual(payload.action.action_type, OrderActionType.HOLD)
+        self.assertEqual(runtime.last_errors["agent_a"], "payload_parse_error")
+
+    def test_llm_json_payload_is_parsed_into_agent_payload(self) -> None:
+        runtime = AgentRuntime(llm_gateway=PayloadGateway())
+
+        payload = runtime.act(tick_context("agent_a"))
+
+        self.assertEqual(payload.action.action_type, OrderActionType.BUY)
+        self.assertEqual(payload.action.quantity, 100)
+
+
+class MalformedGateway:
+    def complete(self, _: object) -> dict[str, object]:
+        return {
+            "candidates": [
+                {
+                    "content": "{not-json",
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+
+class PayloadGateway:
+    def complete(self, _: object) -> dict[str, object]:
+        return {
+            "candidates": [
+                {
+                    "content": json.dumps(
+                        {
+                            "schema_version": "v1",
+                            "tick_id": "2024-01-02T14:02:00+08:00",
+                            "trace_id": "trace_abc",
+                            "agent_id": "agent_a",
+                            "action": {
+                                "action_type": "buy",
+                                "symbol": "demo_stock",
+                                "order_type": "limit",
+                                "price": 15.2,
+                                "quantity": 100,
+                                "time_in_force": "day",
+                            },
+                        }
+                    ),
+                    "finish_reason": "stop",
+                }
+            ]
+        }
 
 
 if __name__ == "__main__":

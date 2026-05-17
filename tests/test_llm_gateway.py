@@ -76,6 +76,10 @@ class LLMGatewayTests(unittest.TestCase):
             return loader(env_file=env_file)
         self.fail("load_llm_config() must accept an env_path or env_file argument")
 
+    def _mock_gateway(self, **kwargs: object) -> LLMGateway:
+        config_type = self._llm_config_type()
+        return LLMGateway(config=config_type(provider_name="deterministic_mock"), **kwargs)
+
     @contextmanager
     def _forbid_network(self):
         with patch.object(
@@ -86,7 +90,7 @@ class LLMGatewayTests(unittest.TestCase):
             yield
 
     def test_complete_returns_schema_shaped_mock_output(self) -> None:
-        gateway = LLMGateway()
+        gateway = self._mock_gateway()
 
         output = gateway.complete(LLMRequest.from_dict(llm_request()))
 
@@ -172,7 +176,7 @@ class LLMGatewayTests(unittest.TestCase):
 
     def test_rate_limit_is_deterministic_and_resets_by_window(self) -> None:
         clock = MutableClock()
-        gateway = LLMGateway(max_requests=2, window_seconds=10.0, clock=clock)
+        gateway = self._mock_gateway(max_requests=2, window_seconds=10.0, clock=clock)
 
         gateway.complete(llm_request(request_id="llm_req_001"))
         gateway.complete(llm_request(request_id="llm_req_002"))
@@ -184,7 +188,7 @@ class LLMGatewayTests(unittest.TestCase):
         self.assertEqual(output["request_id"], "llm_req_004")
 
     def test_precheck_accepts_json_string_and_does_not_apply_permissions(self) -> None:
-        gateway = LLMGateway()
+        gateway = self._mock_gateway()
         raw_output = json.dumps(
             {
                 "schema_version": "v1",
@@ -215,7 +219,7 @@ class LLMGatewayTests(unittest.TestCase):
         self.assertEqual(candidate_content["action"]["action_type"], "post_forum")
 
     def test_precheck_rejects_illegal_top_level_and_candidate_fields(self) -> None:
-        gateway = LLMGateway()
+        gateway = self._mock_gateway()
         output = gateway.complete(llm_request())
 
         with self.assertRaisesRegex(SchemaValidationError, "unknown field"):
@@ -229,7 +233,7 @@ class LLMGatewayTests(unittest.TestCase):
             gateway.precheck_structured_output(bad_candidate)
 
     def test_complete_does_not_swallow_or_merge_other_agent_context(self) -> None:
-        gateway = LLMGateway()
+        gateway = self._mock_gateway()
         request = llm_request(
             "agent_a",
             content=(
