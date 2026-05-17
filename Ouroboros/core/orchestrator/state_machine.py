@@ -324,7 +324,7 @@ class MetaOrchestratorStateMachine:
             "lifecycle_state": lifecycle_state.value,
             "decision": decision,
             "order_event_id": (
-                f"forced_liq_{_stable_id(parsed.agent_id)}"
+                f"forced_liq_{_stable_id(parsed.agent_id)}_{_stable_id(parsed.tick_id)}"
                 if decision == "forced_liquidation"
                 else None
             ),

@@ -1,3 +1,9 @@
+/**
+ * Demo fixture asset only.
+ *
+ * Keep production runtime code on REST/WS data or explicit empty states. Import
+ * demo fixtures through "./demoOnly" only for isolated demos or fixture tooling.
+ */
 import type { DemoSeed } from "../types/demo";
 import type {
   AgentSummary,

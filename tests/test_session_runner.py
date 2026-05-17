@@ -5,6 +5,7 @@ import unittest
 
 from Ouroboros.core.agents import AgentRuntime
 from Ouroboros.core.chronos import InMemoryChronosRepository
+from Ouroboros.core.clearing import ClearingConfig
 from Ouroboros.core.matching import MatchingConfig
 from Ouroboros.core.orchestrator import SessionAgentSpec, SessionRunner
 from Ouroboros.core.schemas import (
@@ -156,6 +157,92 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertIn("audit.graph", pushed_types)
         self.assertEqual([event["seq"] for event in pushed], sorted(event["seq"] for event in pushed))
 
+    def test_margin_call_generates_forced_liquidation_order_through_layer3(self) -> None:
+        runner = liquidation_session_runner(
+            risk_seller_position=200,
+            include_second_buyer=True,
+        )
+        runner.create_session(create_command())
+
+        step = runner.step_session(
+            SESSION_ID,
+            ticks=1,
+            command_id="cmd_step_forced_liq",
+            trace_id=TRACE,
+        )
+
+        runtime = runner._sessions[SESSION_ID]
+        self.assertIsNotNone(runtime.last_order_submission)
+        forced_orders = [
+            order
+            for order in runtime.last_order_submission.accepted_orders
+            if order.order_kind.value == "forced_liquidation"
+        ]
+        self.assertEqual(len(forced_orders), 1)
+        forced_order = forced_orders[0]
+        self.assertEqual(forced_order.agent_id, "risk_seller")
+        self.assertEqual(forced_order.side.value, "sell")
+        self.assertEqual(forced_order.order_type.value, "market")
+        self.assertEqual(forced_order.time_in_force.value, "ioc")
+        self.assertEqual(forced_order.quantity, 100)
+        self.assertEqual(forced_order.source_risk_state.value, "margin_call")
+        self.assertIn(forced_order.event_id, step["tick_result"]["published_event_ids"])
+
+        self.assertIsNotNone(runtime.last_trade_batch)
+        self.assertEqual(
+            [trade.sell_order_id for trade in runtime.last_trade_batch.trades],
+            [forced_order.event_id],
+        )
+        snapshot = runtime.last_account_snapshots["risk_seller"]
+        self.assertEqual(snapshot.positions, {})
+
+        lifecycle_payload = lifecycle_payload_for(runner, "risk_seller")
+        self.assertEqual(lifecycle_payload["lifecycle_state"], "liquidating")
+        self.assertEqual(lifecycle_payload["decision"], "forced_liquidation")
+        self.assertEqual(
+            lifecycle_payload["forced_liquidation_order_status"],
+            "queued_for_layer3",
+        )
+        self.assertEqual(lifecycle_payload["forced_liquidation_quantity"], 100)
+
+    def test_margin_call_without_sellable_position_marks_lifecycle_without_order(self) -> None:
+        runner = liquidation_session_runner(
+            risk_seller_position=100,
+            include_second_buyer=False,
+        )
+        runner.create_session(create_command())
+
+        step = runner.step_session(
+            SESSION_ID,
+            ticks=1,
+            command_id="cmd_step_forced_liq_no_position",
+            trace_id=TRACE,
+        )
+
+        runtime = runner._sessions[SESSION_ID]
+        published_event_ids = step["tick_result"]["published_event_ids"]
+        self.assertFalse(any(event_id.startswith("forced_liq_") for event_id in published_event_ids))
+        self.assertIsNotNone(runtime.last_order_submission)
+        self.assertFalse(
+            any(
+                order.order_kind.value == "forced_liquidation"
+                for order in runtime.last_order_submission.accepted_orders
+            )
+        )
+        self.assertIsNotNone(runtime.last_trade_batch)
+        self.assertEqual(len(runtime.last_trade_batch.trades), 1)
+        snapshot = runtime.last_account_snapshots["risk_seller"]
+        self.assertEqual(snapshot.positions, {})
+
+        lifecycle_payload = lifecycle_payload_for(runner, "risk_seller")
+        self.assertEqual(lifecycle_payload["lifecycle_state"], "liquidating")
+        self.assertEqual(lifecycle_payload["decision"], "forced_liquidation")
+        self.assertEqual(
+            lifecycle_payload["forced_liquidation_order_status"],
+            "skipped_no_sellable_position",
+        )
+        self.assertEqual(lifecycle_payload["forced_liquidation_quantity"], 0)
+
 
 def session_runner(frontend_event_sink=None) -> SessionRunner:
     return SessionRunner(
@@ -165,6 +252,28 @@ def session_runner(frontend_event_sink=None) -> SessionRunner:
         matching_config=MatchingConfig(lot_size=100),
         session_id_factory=lambda _command, _sequence: SESSION_ID,
         frontend_event_sink=frontend_event_sink,
+    )
+
+
+def liquidation_session_runner(
+    *,
+    risk_seller_position: int,
+    include_second_buyer: bool,
+) -> SessionRunner:
+    return SessionRunner(
+        chronos_repository=liquidation_chronos_repository(),
+        agent_specs=liquidation_agent_specs(
+            risk_seller_position=risk_seller_position,
+            include_second_buyer=include_second_buyer,
+        ),
+        agent_runtime=AgentRuntime(
+            scripted_actions=liquidation_scripted_actions(
+                include_second_buyer=include_second_buyer,
+            )
+        ),
+        clearing_config=ClearingConfig(margin_call_drawdown_pct=50.0),
+        matching_config=MatchingConfig(lot_size=100),
+        session_id_factory=lambda _command, _sequence: SESSION_ID,
     )
 
 
@@ -181,6 +290,25 @@ def create_command() -> CreateSessionCommand:
             "tick_interval": "5m",
         }
     )
+
+
+def lifecycle_payload_for(runner: SessionRunner, agent_id: str) -> dict[str, object]:
+    events = runner.get_frontend_events(
+        SESSION_ID,
+        from_seq=0,
+        limit=500,
+        request_id=f"req_lifecycle_{agent_id}",
+        trace_id=TRACE,
+    )["events"]
+    lifecycle_events = [
+        event["payload"]
+        for event in events
+        if event["type"] == "runtime.agent_lifecycle"
+        and event["payload"]["agent_id"] == agent_id
+    ]
+    if not lifecycle_events:
+        raise AssertionError(f"missing lifecycle event for {agent_id}")
+    return lifecycle_events[-1]
 
 
 def chronos_repository() -> InMemoryChronosRepository:
@@ -225,6 +353,23 @@ def chronos_repository() -> InMemoryChronosRepository:
     )
 
 
+def liquidation_chronos_repository() -> InMemoryChronosRepository:
+    return InMemoryChronosRepository.from_dicts(
+        facts=[],
+        initial_market_seeds={
+            SYMBOL: {
+                "schema_version": SCHEMA_VERSION,
+                "seed_id": "seed_liquidation",
+                "symbol": SYMBOL,
+                "previous_close": 4.0,
+                "limit_up": 20.0,
+                "limit_down": 0.01,
+                "initial_l2_snapshot": {"bids": [], "asks": []},
+            }
+        },
+    )
+
+
 def agent_specs() -> list[SessionAgentSpec]:
     return [
         SessionAgentSpec.from_dict(
@@ -246,6 +391,43 @@ def agent_specs() -> list[SessionAgentSpec]:
     ]
 
 
+def liquidation_agent_specs(
+    *,
+    risk_seller_position: int,
+    include_second_buyer: bool,
+) -> list[SessionAgentSpec]:
+    specs = [
+        SessionAgentSpec.from_dict(
+            {
+                "permission_profile": agent_profile("buyer_a"),
+                "cash": 20_000.0,
+                "positions": {},
+                "mark_prices": {SYMBOL: 10.0},
+            }
+        ),
+        SessionAgentSpec.from_dict(
+            {
+                "permission_profile": agent_profile("risk_seller"),
+                "cash": 0.0,
+                "positions": {SYMBOL: risk_seller_position},
+                "mark_prices": {SYMBOL: 10.0},
+            }
+        ),
+    ]
+    if include_second_buyer:
+        specs.append(
+            SessionAgentSpec.from_dict(
+                {
+                    "permission_profile": agent_profile("buyer_b"),
+                    "cash": 20_000.0,
+                    "positions": {},
+                    "mark_prices": {SYMBOL: 10.0},
+                }
+            )
+        )
+    return specs
+
+
 def agent_profile(agent_id: str) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -259,6 +441,61 @@ def agent_profile(agent_id: str) -> dict[str, object]:
         },
         "official_news_scope": ["announcement", "news"],
     }
+
+
+def liquidation_scripted_actions(*, include_second_buyer: bool) -> dict[str, list[dict[str, object]]]:
+    actions = {
+        "buyer_a": [
+            {
+                "schema_version": SCHEMA_VERSION,
+                "tick_id": TICK,
+                "trace_id": TRACE,
+                "agent_id": "buyer_a",
+                "action": {
+                    "action_type": "buy",
+                    "symbol": SYMBOL,
+                    "order_type": "limit",
+                    "price": 4.0,
+                    "quantity": 100,
+                    "time_in_force": "day",
+                },
+            }
+        ],
+        "risk_seller": [
+            {
+                "schema_version": SCHEMA_VERSION,
+                "tick_id": TICK,
+                "trace_id": TRACE,
+                "agent_id": "risk_seller",
+                "action": {
+                    "action_type": "sell",
+                    "symbol": SYMBOL,
+                    "order_type": "limit",
+                    "price": 4.0,
+                    "quantity": 100,
+                    "time_in_force": "day",
+                },
+            }
+        ],
+    }
+    if include_second_buyer:
+        actions["buyer_b"] = [
+            {
+                "schema_version": SCHEMA_VERSION,
+                "tick_id": TICK,
+                "trace_id": TRACE,
+                "agent_id": "buyer_b",
+                "action": {
+                    "action_type": "buy",
+                    "symbol": SYMBOL,
+                    "order_type": "limit",
+                    "price": 4.0,
+                    "quantity": 100,
+                    "time_in_force": "day",
+                },
+            }
+        ]
+    return actions
 
 
 def scripted_actions() -> dict[str, list[dict[str, object]]]:

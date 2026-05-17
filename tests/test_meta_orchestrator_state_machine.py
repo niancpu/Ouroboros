@@ -168,6 +168,10 @@ class MetaOrchestratorStateMachineTests(unittest.TestCase):
         self.assertEqual(result["lifecycle_state"], "liquidating")
         self.assertEqual(result["decision"], "forced_liquidation")
         self.assertEqual(
+            result["order_event_id"],
+            "forced_liq_agent_a_2024_01_02T14_02_00_08_00",
+        )
+        self.assertEqual(
             machine.last_agent_lifecycle_events["agent_a"].reason_code,
             "equity_drawdown_limit",
         )
