@@ -5,7 +5,7 @@ import type {
   AuditGraphNode,
 } from "../../types/api";
 import { agentTypeLabels, labelFrom, riskStateLabels } from "../../i18n/labels";
-import { formatPercent } from "../../utils/format";
+import { displayAgentName, formatPercent } from "../../utils/format";
 import { positionExposure } from "../../utils/graph";
 import { EmptyState } from "../common/EmptyState";
 
@@ -26,22 +26,24 @@ export function AgentInspectorPanel({
 }: AgentInspectorPanelProps) {
   return (
     <section className="agent-inspector">
-      <h2>Inspector</h2>
+      <h2>节点详情</h2>
       {selectedAgent && selectedNode ? (
         <div className="inspector-grid">
-          <span>agent_id</span>
+          <span>名称</span>
+          <strong>{displayAgentName(selectedAgent.agent_id)}</strong>
+          <span>ID</span>
           <strong>{selectedAgent.agent_id}</strong>
-          <span>type</span>
+          <span>类型</span>
           <strong>{labelFrom(agentTypeLabels, selectedAgent.agent_type)}</strong>
-          <span>risk</span>
+          <span>风险</span>
           <strong>{labelFrom(riskStateLabels, selectedAgent.risk_state)}</strong>
-          <span>belief</span>
+          <span>信念</span>
           <strong>{selectedNode.belief_score.toFixed(2)}</strong>
-          <span>position</span>
+          <span>持仓</span>
           <strong>{formatPercent(positionExposure(selectedNode, allNodes))}</strong>
         </div>
       ) : (
-        <EmptyState label="NO AGENT SELECTED" />
+        <EmptyState label="未选择节点" />
       )}
       <div className="chain-list">
         {selectedEdges.length ? (
@@ -55,7 +57,7 @@ export function AgentInspectorPanel({
             </button>
           ))
         ) : (
-          <span>NO PUBLIC CAUSAL CHAIN</span>
+          <span>暂无公开因果链</span>
         )}
       </div>
     </section>

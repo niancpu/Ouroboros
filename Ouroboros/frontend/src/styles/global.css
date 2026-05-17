@@ -634,14 +634,22 @@ h3 {
   overflow: hidden;
 }
 
+.left-sidebar {
+  display: grid;
+  grid-template-rows: max-content minmax(0, 1fr);
+  overflow: hidden;
+  border-right: var(--divider);
+  background: var(--color-surface);
+}
+
 .chronos-feed {
   position: relative;
   padding: 12px 22px 32px;
   overflow: auto;
-  border-right: var(--divider);
   background: var(--color-surface);
   color: var(--color-text-primary);
   font-family: var(--font-machine);
+  min-height: 0;
 }
 
 .chronos-feed::before {
@@ -886,15 +894,16 @@ h3 {
   background: var(--color-surface);
 }
 
-.inspector-book {
-  display: grid;
-  grid-auto-rows: max-content;
-}
-
 .agent-inspector {
   border-bottom: var(--divider);
-  min-height: 242px;
+  min-height: 214px;
   padding: 12px 0 var(--space-3);
+}
+
+.agent-inspector h2 {
+  margin: 0 0 12px;
+  padding: 0 var(--space-3);
+  font-size: 14px;
 }
 
 .inspector-grid {

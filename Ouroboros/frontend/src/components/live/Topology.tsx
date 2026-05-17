@@ -70,9 +70,10 @@ const GRAPH_MIN_ZOOM = 0.15;
 const GRAPH_MAX_ZOOM = 8;
 const GRAPH_DEFAULT_CENTER: [number, number] = [50, 50];
 const GRAPH_DEFAULT_VIEW: GraphView = { zoom: 1, center: GRAPH_DEFAULT_CENTER };
-const LABEL_MAX_ZOOM_SCALE = 3.5;
-const LABEL_MIN_ZOOM_SCALE = 0.65;
+const LABEL_MAX_ZOOM_SCALE = 1.2;
+const LABEL_MIN_ZOOM_SCALE = 0.85;
 const LABEL_BASE_FONT_SIZE = 11;
+const LABEL_VIEWPORT_MARGIN = 24;
 
 const C = {
   accent: "#0037c8",
@@ -140,9 +141,7 @@ export function Topology({
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
   const latestVisualNodesRef = useRef<VisualNode[]>([]);
-  const latestGraphNodesRef = useRef<AuditGraphNode[]>([]);
   const latestSelectedAgentIdRef = useRef<string | null>(null);
-  const latestLifecycleMapRef = useRef<Map<string, LifecycleState>>(agentLifecycleMap);
   const latestOnHoverAgentRef = useRef(onHoverAgent);
   const latestOnSelectAgentRef = useRef(onSelectAgent);
   const latestOnSelectReasonRef = useRef(onSelectReason);
@@ -340,9 +339,7 @@ export function Topology({
     const labelFont = overlayLabelFont(LABEL_BASE_FONT_SIZE, labelScale);
     const overlayStrokeWidth = overlayLineWidth(labelScale);
     const sourceOffset = 12 * labelScale;
-    const agentElbowOffset = 20 * labelScale;
-    const agentLabelOffset = 6 * labelScale;
-    const agentTextYOffset = 7 * labelScale;
+    const agentNameOffset = 13 * labelScale;
     const overlay = new echarts.graphic.Group({ silent: true });
     overlay.add(new echarts.graphic.Text({
       x: 12,
@@ -362,13 +359,14 @@ export function Topology({
       if (!Array.isArray(pixel)) return;
       const [x, y] = pixel;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      if (!isLabelAnchorVisible(x, y, width, height)) return;
 
       if (visualNode.kind === "source") {
         const labelRight = x < width - 96 * labelScale;
         overlay.add(new echarts.graphic.Text({
           silent: true,
           x: labelRight ? x + sourceOffset : x - sourceOffset,
-          y: y - 13 * labelScale,
+          y,
           style: {
             text: sourceLabel(visualNode.id),
             fill: C.secondary,
@@ -381,18 +379,11 @@ export function Topology({
       }
 
       const node = visualNode.node;
-      const allNodes = latestGraphNodesRef.current;
-      const lifecycleState = latestLifecycleMapRef.current.get(node.agent_id);
       const isSelected = node.agent_id === latestSelectedAgentIdRef.current;
-      const exposure = positionExposure(node, allNodes);
-      const labelRight = x < width - 172 * labelScale;
-      const elbowX = labelRight ? x + agentElbowOffset : x - agentElbowOffset;
-      const labelX = labelRight ? elbowX + agentLabelOffset : elbowX - agentLabelOffset;
-      const labelY = Math.max(18 * labelScale, Math.min(height - 18 * labelScale, y - 14 * labelScale));
+      const labelRight = x < width - 120 * labelScale;
+      const labelX = labelRight ? x + agentNameOffset : x - agentNameOffset;
       const dimmed = spotlightIds && !spotlightIds.has(node.agent_id);
       const opacity = dimmed ? 0.1 : 1;
-      const typeLabel = labelFrom(agentTypeLabels, node.agent_type);
-      const riskLabel = labelFrom(riskStateLabels, node.risk_state);
       const displayName = displayAgentName(node.agent_id);
 
       if (isSelected) {
@@ -413,35 +404,17 @@ export function Topology({
       overlay.add(
         new echarts.graphic.Line({
           silent: true,
-          shape: {
-            x1: x - 5.5 * labelScale,
-            y1: y + 6.4 * labelScale,
-            x2: x - 5.5 * labelScale + exposure * 11 * labelScale,
-            y2: y + 6.4 * labelScale,
-          },
+          shape: { x1: x + (labelRight ? 7 : -7) * labelScale, y1: y, x2: labelX - (labelRight ? 4 : -4) * labelScale, y2: y },
           style: { stroke: C.text, lineWidth: overlayStrokeWidth, opacity },
-        }),
-      );
-      overlay.add(
-        new echarts.graphic.Polyline({
-          silent: true,
-          shape: {
-            points: [
-              [x + (labelRight ? 9 : -9) * labelScale, y],
-              [elbowX, y],
-              [elbowX, labelY],
-            ],
-          },
-          style: { stroke: C.text, fill: "transparent", lineWidth: overlayStrokeWidth, opacity },
         }),
       );
       overlay.add(
         new echarts.graphic.Text({
           silent: true,
           x: labelX,
-          y: labelY - agentTextYOffset,
+          y,
           style: {
-            text: `${displayName} ${typeLabel} 信念${node.belief_score.toFixed(2)} 持仓${formatPercent(exposure)} ${riskLabel}`,
+            text: displayName,
             fill: dimmed ? "rgba(0,0,0,0.1)" : C.secondary,
             font: labelFont,
             align: labelRight ? "left" : "right",
@@ -449,35 +422,6 @@ export function Topology({
           },
         }),
       );
-
-      if (lifecycleState === "margin_call" || lifecycleState === "liquidating") {
-        overlay.add(new echarts.graphic.Line({
-          silent: true,
-          shape: {
-            x1: x + 9.5 * labelScale,
-            y1: y + 5 * labelScale,
-            x2: x + 14 * labelScale,
-            y2: y + 5 * labelScale,
-          },
-          style: { stroke: C.danger, lineWidth: overlayStrokeWidth, opacity },
-        }));
-      }
-      if (lifecycleState === "liquidating" || lifecycleState === "terminated") {
-        overlay.add(new echarts.graphic.Line({
-          silent: true,
-          shape: {
-            x1: x + 9.5 * labelScale,
-            y1: y + 8 * labelScale,
-            x2: x + 14 * labelScale,
-            y2: y + 8 * labelScale,
-          },
-          style: {
-            stroke: lifecycleState === "liquidating" ? C.danger : C.text,
-            lineWidth: overlayStrokeWidth,
-            opacity,
-          },
-        }));
-      }
     });
 
     zr.add(overlay);
@@ -486,10 +430,8 @@ export function Topology({
 
   useEffect(() => {
     latestVisualNodesRef.current = visualNodes;
-    latestGraphNodesRef.current = graphNodes;
     latestSelectedAgentIdRef.current = selectedAgentId;
-    latestLifecycleMapRef.current = agentLifecycleMap;
-  }, [agentLifecycleMap, graphNodes, selectedAgentId, visualNodes]);
+  }, [selectedAgentId, visualNodes]);
 
   useEffect(() => {
     latestOnHoverAgentRef.current = onHoverAgent;
@@ -912,6 +854,15 @@ function overlayLabelFont(baseSize: number, scale: number): string {
 
 function overlayLineWidth(scale: number): number {
   return Math.max(1, Math.min(1.6, scale));
+}
+
+function isLabelAnchorVisible(x: number, y: number, width: number, height: number): boolean {
+  return (
+    x >= -LABEL_VIEWPORT_MARGIN &&
+    x <= width + LABEL_VIEWPORT_MARGIN &&
+    y >= -LABEL_VIEWPORT_MARGIN &&
+    y <= height + LABEL_VIEWPORT_MARGIN
+  );
 }
 
 function formatCssPx(value: number): string {

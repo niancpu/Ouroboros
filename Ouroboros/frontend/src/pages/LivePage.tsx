@@ -300,28 +300,37 @@ export function LivePage() {
 
       {(snapshot.phase.kind === "ready" || snapshot.phase.kind === "idle") && (
         <div className="live-columns">
-          <aside className="chronos-feed">
-            <h2>时间轴事件流</h2>
-            {feedEvents.length === 0 ? (
-              <EmptyState label="NO EVENTS YET" />
-            ) : (
-              feedEvents.map((event) => {
-                const reasonRef = typeof event.payload === "object" && event.payload !== null
-                  ? (event.payload as { post_id?: string; reason_ref?: string }).post_id ??
-                    (event.payload as { reason_ref?: string }).reason_ref
-                  : undefined;
-                return (
-                  <article
-                    className={reasonRef && reasonRef === selectedReasonRef ? "sync-highlight" : ""}
-                    key={`${event.seq}-${event.type}`}
-                  >
-                    <time>{formatTick(event.tick_id)}</time>
-                    <strong>{labelFrom(eventTypeLabels, event.type)}</strong>
-                    <p>{eventText(event)}</p>
-                  </article>
-                );
-              })
-            )}
+          <aside className="left-sidebar">
+            <AgentInspectorPanel
+              selectedAgent={selectedAgentAccount}
+              selectedNode={selectedNode}
+              selectedEdges={selectedEdges}
+              allNodes={auditGraph.nodes}
+              onSelectReason={setSelectedReasonRef}
+            />
+            <section className="chronos-feed">
+              <h2>时间轴事件流</h2>
+              {feedEvents.length === 0 ? (
+                <EmptyState label="NO EVENTS YET" />
+              ) : (
+                feedEvents.map((event) => {
+                  const reasonRef = typeof event.payload === "object" && event.payload !== null
+                    ? (event.payload as { post_id?: string; reason_ref?: string }).post_id ??
+                      (event.payload as { reason_ref?: string }).reason_ref
+                    : undefined;
+                  return (
+                    <article
+                      className={reasonRef && reasonRef === selectedReasonRef ? "sync-highlight" : ""}
+                      key={`${event.seq}-${event.type}`}
+                    >
+                      <time>{formatTick(event.tick_id)}</time>
+                      <strong>{labelFrom(eventTypeLabels, event.type)}</strong>
+                      <p>{eventText(event)}</p>
+                    </article>
+                  );
+                })
+              )}
+            </section>
           </aside>
 
           <section className="canvas-stack">
@@ -347,14 +356,7 @@ export function LivePage() {
             <MarketCurves bars={ohlcv} lastPrice={latestMarket.last_price} />
           </section>
 
-          <aside className="order-book inspector-book">
-            <AgentInspectorPanel
-              selectedAgent={selectedAgentAccount}
-              selectedNode={selectedNode}
-              selectedEdges={selectedEdges}
-              allNodes={auditGraph.nodes}
-              onSelectReason={setSelectedReasonRef}
-            />
+          <aside className="order-book">
             <h2>盘口</h2>
             {latestMarket.level2.asks.length || latestMarket.level2.bids.length ? (
               <>
