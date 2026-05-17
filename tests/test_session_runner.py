@@ -95,8 +95,15 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertTrue(audit_events)
         audit_nodes = audit_events[-1]["payload"]["nodes"]
         audit_edges = audit_events[-1]["payload"]["edges"]
+        audit_node_ids = {node["agent_id"] for node in audit_nodes}
         self.assertEqual({node["agent_id"] for node in audit_nodes}, {"buyer", "seller"})
         self.assertTrue(audit_edges)
+        self.assertTrue(
+            all(
+                edge["source"] in audit_node_ids and edge["target"] in audit_node_ids
+                for edge in audit_edges
+            )
+        )
         self.assertTrue(any(edge["reason_ref"].startswith("mkt_") for edge in audit_edges))
         self.assertTrue(any(edge["reason_ref"].startswith("trade_") for edge in audit_edges))
         self.assertTrue(
@@ -152,6 +159,40 @@ class SessionRunnerTests(unittest.TestCase):
             record for record in records if record["event_type"] == "audit.causal_chain"
         ]
         self.assertTrue(any(record["causal_chain_steps_count"] > 0 for record in chain_records))
+
+    def test_market_only_tick_still_generates_frontend_renderable_graph_edges(self) -> None:
+        runner = market_only_session_runner()
+        runner.create_session(create_command())
+
+        runner.step_session(
+            SESSION_ID,
+            ticks=1,
+            command_id="cmd_step_market_only_graph",
+            trace_id=TRACE,
+        )
+
+        events = runner.get_frontend_events(
+            SESSION_ID,
+            from_seq=0,
+            limit=500,
+            request_id="req_market_only_graph",
+            trace_id=TRACE,
+        )["events"]
+        audit_events = [event for event in events if event["type"] == "audit.graph"]
+        self.assertTrue(audit_events)
+        graph = audit_events[-1]["payload"]
+        node_ids = {node["agent_id"] for node in graph["nodes"]}
+        self.assertEqual(node_ids, {"buyer", "seller"})
+        self.assertTrue(graph["edges"])
+        self.assertTrue(
+            all(
+                edge["source"] in node_ids
+                and edge["target"] in node_ids
+                and edge["source"] != edge["target"]
+                for edge in graph["edges"]
+            )
+        )
+        self.assertTrue(any(edge["reason_ref"].startswith("mkt_") for edge in graph["edges"]))
 
     def test_audit_graph_generation_log_write_failure_does_not_fail_tick(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -394,6 +435,21 @@ def session_runner(frontend_event_sink=None) -> SessionRunner:
         frontend_event_sink=frontend_event_sink,
     )
 
+
+
+def market_only_session_runner() -> SessionRunner:
+    return SessionRunner(
+        chronos_repository=chronos_repository(),
+        agent_specs=agent_specs(),
+        agent_runtime=AgentRuntime(
+            default_actions={
+                "buyer": {"action_type": "hold"},
+                "seller": {"action_type": "hold"},
+            }
+        ),
+        matching_config=MatchingConfig(lot_size=100),
+        session_id_factory=lambda _command, _sequence: SESSION_ID,
+    )
 
 def liquidation_session_runner(
     *,
