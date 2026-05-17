@@ -70,6 +70,9 @@ const GRAPH_MIN_ZOOM = 0.15;
 const GRAPH_MAX_ZOOM = 8;
 const GRAPH_DEFAULT_CENTER: [number, number] = [50, 50];
 const GRAPH_DEFAULT_VIEW: GraphView = { zoom: 1, center: GRAPH_DEFAULT_CENTER };
+const LABEL_MAX_ZOOM_SCALE = 3.5;
+const LABEL_MIN_ZOOM_SCALE = 0.65;
+const LABEL_BASE_FONT_SIZE = 11;
 
 const C = {
   accent: "#0037c8",
@@ -333,6 +336,13 @@ export function Topology({
     }
     const width = chart.getWidth();
     const height = chart.getHeight();
+    const labelScale = overlayLabelScale(graphView.zoom);
+    const labelFont = overlayLabelFont(LABEL_BASE_FONT_SIZE, labelScale);
+    const overlayStrokeWidth = overlayLineWidth(labelScale);
+    const sourceOffset = 12 * labelScale;
+    const agentElbowOffset = 20 * labelScale;
+    const agentLabelOffset = 6 * labelScale;
+    const agentTextYOffset = 7 * labelScale;
     const overlay = new echarts.graphic.Group({ silent: true });
     overlay.add(new echarts.graphic.Text({
       x: 12,
@@ -354,15 +364,15 @@ export function Topology({
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
       if (visualNode.kind === "source") {
-        const labelRight = x < width - 96;
+        const labelRight = x < width - 96 * labelScale;
         overlay.add(new echarts.graphic.Text({
           silent: true,
-          x: labelRight ? x + 12 : x - 12,
-          y: y - 13,
+          x: labelRight ? x + sourceOffset : x - sourceOffset,
+          y: y - 13 * labelScale,
           style: {
             text: sourceLabel(visualNode.id),
             fill: C.secondary,
-            font: "11px Helvetica Neue, Arial, PingFang SC, sans-serif",
+            font: labelFont,
             align: labelRight ? "left" : "right",
             verticalAlign: "middle",
           },
@@ -375,10 +385,10 @@ export function Topology({
       const lifecycleState = latestLifecycleMapRef.current.get(node.agent_id);
       const isSelected = node.agent_id === latestSelectedAgentIdRef.current;
       const exposure = positionExposure(node, allNodes);
-      const labelRight = x < width - 172;
-      const elbowX = labelRight ? x + 20 : x - 20;
-      const labelX = labelRight ? elbowX + 6 : elbowX - 6;
-      const labelY = Math.max(18, Math.min(height - 18, y - 14));
+      const labelRight = x < width - 172 * labelScale;
+      const elbowX = labelRight ? x + agentElbowOffset : x - agentElbowOffset;
+      const labelX = labelRight ? elbowX + agentLabelOffset : elbowX - agentLabelOffset;
+      const labelY = Math.max(18 * labelScale, Math.min(height - 18 * labelScale, y - 14 * labelScale));
       const dimmed = spotlightIds && !spotlightIds.has(node.agent_id);
       const opacity = dimmed ? 0.1 : 1;
       const typeLabel = labelFrom(agentTypeLabels, node.agent_type);
@@ -386,14 +396,15 @@ export function Topology({
       const displayName = displayAgentName(node.agent_id);
 
       if (isSelected) {
+        const selectionSize = 24 * labelScale;
         overlay.add(new echarts.graphic.Rect({
           silent: true,
-          shape: { x: x - 12, y: y - 12, width: 24, height: 24 },
+          shape: { x: x - selectionSize / 2, y: y - selectionSize / 2, width: selectionSize, height: selectionSize },
           style: {
             fill: "transparent",
             stroke: C.text,
             lineDash: [4, 3],
-            lineWidth: 1,
+            lineWidth: overlayStrokeWidth,
             opacity,
           },
         }));
@@ -402,8 +413,13 @@ export function Topology({
       overlay.add(
         new echarts.graphic.Line({
           silent: true,
-          shape: { x1: x - 5.5, y1: y + 6.4, x2: x - 5.5 + exposure * 11, y2: y + 6.4 },
-          style: { stroke: C.text, lineWidth: 1, opacity },
+          shape: {
+            x1: x - 5.5 * labelScale,
+            y1: y + 6.4 * labelScale,
+            x2: x - 5.5 * labelScale + exposure * 11 * labelScale,
+            y2: y + 6.4 * labelScale,
+          },
+          style: { stroke: C.text, lineWidth: overlayStrokeWidth, opacity },
         }),
       );
       overlay.add(
@@ -411,23 +427,23 @@ export function Topology({
           silent: true,
           shape: {
             points: [
-              [x + (labelRight ? 9 : -9), y],
+              [x + (labelRight ? 9 : -9) * labelScale, y],
               [elbowX, y],
               [elbowX, labelY],
             ],
           },
-          style: { stroke: C.text, fill: "transparent", lineWidth: 1, opacity },
+          style: { stroke: C.text, fill: "transparent", lineWidth: overlayStrokeWidth, opacity },
         }),
       );
       overlay.add(
         new echarts.graphic.Text({
           silent: true,
           x: labelX,
-          y: labelY - 7,
+          y: labelY - agentTextYOffset,
           style: {
             text: `${displayName} ${typeLabel} 信念${node.belief_score.toFixed(2)} 持仓${formatPercent(exposure)} ${riskLabel}`,
             fill: dimmed ? "rgba(0,0,0,0.1)" : C.secondary,
-            font: "11px Helvetica Neue, Arial, PingFang SC, sans-serif",
+            font: labelFont,
             align: labelRight ? "left" : "right",
             verticalAlign: "middle",
           },
@@ -437,15 +453,29 @@ export function Topology({
       if (lifecycleState === "margin_call" || lifecycleState === "liquidating") {
         overlay.add(new echarts.graphic.Line({
           silent: true,
-          shape: { x1: x + 9.5, y1: y + 5, x2: x + 14, y2: y + 5 },
-          style: { stroke: C.danger, lineWidth: 1, opacity },
+          shape: {
+            x1: x + 9.5 * labelScale,
+            y1: y + 5 * labelScale,
+            x2: x + 14 * labelScale,
+            y2: y + 5 * labelScale,
+          },
+          style: { stroke: C.danger, lineWidth: overlayStrokeWidth, opacity },
         }));
       }
       if (lifecycleState === "liquidating" || lifecycleState === "terminated") {
         overlay.add(new echarts.graphic.Line({
           silent: true,
-          shape: { x1: x + 9.5, y1: y + 8, x2: x + 14, y2: y + 8 },
-          style: { stroke: lifecycleState === "liquidating" ? C.danger : C.text, lineWidth: 1, opacity },
+          shape: {
+            x1: x + 9.5 * labelScale,
+            y1: y + 8 * labelScale,
+            x2: x + 14 * labelScale,
+            y2: y + 8 * labelScale,
+          },
+          style: {
+            stroke: lifecycleState === "liquidating" ? C.danger : C.text,
+            lineWidth: overlayStrokeWidth,
+            opacity,
+          },
         }));
       }
     });
@@ -869,6 +899,23 @@ function watermarkText(text: string) {
     fill: "rgba(0,0,0,0.22)",
     font: "10px JetBrains Mono, Courier New, monospace",
   };
+}
+
+function overlayLabelScale(zoom: number): number {
+  const finiteZoom = Number.isFinite(zoom) ? zoom : GRAPH_DEFAULT_VIEW.zoom;
+  return Math.max(LABEL_MIN_ZOOM_SCALE, Math.min(LABEL_MAX_ZOOM_SCALE, finiteZoom));
+}
+
+function overlayLabelFont(baseSize: number, scale: number): string {
+  return `${formatCssPx(baseSize * scale)} Helvetica Neue, Arial, PingFang SC, sans-serif`;
+}
+
+function overlayLineWidth(scale: number): number {
+  return Math.max(1, Math.min(1.6, scale));
+}
+
+function formatCssPx(value: number): string {
+  return `${Number(value.toFixed(2))}px`;
 }
 
 function agentTypeVisual(agentType: AgentType): {
