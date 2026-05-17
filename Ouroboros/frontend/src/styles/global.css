@@ -1093,7 +1093,7 @@ h3 {
 
 .chronos-page {
   display: grid;
-  grid-template-rows: 58px 20vh 1fr;
+  grid-template-rows: 58px 20vh minmax(0, 1fr);
 }
 
 .timeline {
@@ -1122,12 +1122,18 @@ h3 {
   background: var(--color-surface);
 }
 
+.timeline span.past {
+  border-radius: 50%;
+}
+
 .timeline span.current {
   border-color: var(--color-accent);
+  border-radius: 50%;
   background: var(--color-accent);
 }
 
-.timeline span.future {
+.timeline span.future,
+.timeline span.draft {
   width: 0;
   height: 0;
   border-right: 10px solid transparent;
@@ -1136,27 +1142,56 @@ h3 {
   background: transparent;
 }
 
+.timeline span.draft {
+  border-bottom-color: var(--color-danger);
+}
+
 .chronos-page .terminal-header {
   grid-template-columns: repeat(4, max-content) 1fr;
 }
 
 .chronos-tracks {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 320px;
+  min-height: 0;
 }
 
 .chronos-tracks section {
+  display: flex;
+  flex-direction: column;
   padding: var(--space-5);
   overflow: auto;
   background: var(--color-surface);
 }
 
-.official-track {
+.chronos-tracks section + section {
   border-right: var(--divider);
 }
 
+.chronos-tracks header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-bottom: var(--line);
+  margin-bottom: var(--space-3);
+  font-family: var(--font-machine);
+}
+
+.chronos-tracks header h2 {
+  margin-bottom: 10px;
+}
+
+.chronos-tracks header span,
+.chronos-tracks small {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-machine);
+  font-size: var(--text-caption);
+}
+
 .official-track article,
-.rumor-track article {
+.rumor-track article,
+.draft-track article {
   padding: 14px 0;
   border-top: var(--line);
 }
@@ -1168,6 +1203,26 @@ h3 {
 
 .rumor-track {
   font-family: var(--font-machine);
+}
+
+.draft-track {
+  border-left: var(--divider);
+  font-family: var(--font-machine);
+}
+
+.draft-track strong {
+  display: block;
+  margin: var(--space-2) 0;
+  color: var(--color-danger);
+}
+
+.chronos-warning {
+  margin-top: var(--space-4);
+  border-top: var(--line);
+  padding-top: var(--space-3);
+  color: var(--color-danger);
+  font-family: var(--font-machine);
+  font-size: var(--text-caption);
 }
 
 .dossier-header {

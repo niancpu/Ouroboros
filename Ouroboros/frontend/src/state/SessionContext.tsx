@@ -82,6 +82,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           session_id: created.session_id,
           status: created.status,
           current_tick_id: created.current_tick_id,
+          start_tick_id: created.start_tick_id ?? req.start_tick_id,
+          end_tick_id: created.end_tick_id ?? req.end_tick_id,
           tick_state: undefined,
           agent_count: 0,
           active_agent_count: 0,

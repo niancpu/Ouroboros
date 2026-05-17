@@ -69,12 +69,16 @@ export interface CreateSessionData {
   status: SessionStatus;
   current_tick_id: string;
   websocket_url: string;
+  start_tick_id?: string;
+  end_tick_id?: string;
 }
 
 export interface SessionData {
   session_id: string;
   status: SessionStatus;
   current_tick_id: string;
+  start_tick_id?: string;
+  end_tick_id?: string;
   tick_state?: TickState;
   agent_count: number;
   active_agent_count: number;
