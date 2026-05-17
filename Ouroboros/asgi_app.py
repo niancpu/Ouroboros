@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -81,45 +82,103 @@ async def session_ws(
         _realtime_gateway.disconnect(session_id, client_id)
 
 
+@dataclass(frozen=True)
+class _DefaultAgentTemplate:
+    agent_id: str
+    agent_type: str
+    cash: float
+    position: int
+
+
+_DEFAULT_AGENT_TEMPLATES: tuple[_DefaultAgentTemplate, ...] = (
+    _DefaultAgentTemplate("mutual_fund_a", "mutual_fund", 2_000_000.0, 120_000),
+    _DefaultAgentTemplate("mutual_fund_b", "mutual_fund", 1_800_000.0, 100_000),
+    _DefaultAgentTemplate("hot_money_a", "hot_money", 800_000.0, 70_000),
+    _DefaultAgentTemplate("hot_money_b", "hot_money", 750_000.0, 65_000),
+    _DefaultAgentTemplate("quant_algo_a", "quant_algo", 600_000.0, 50_000),
+    _DefaultAgentTemplate("quant_algo_b", "quant_algo", 600_000.0, 45_000),
+    _DefaultAgentTemplate("national_team_a", "national_team", 5_000_000.0, 260_000),
+    _DefaultAgentTemplate("national_team_b", "national_team", 4_500_000.0, 240_000),
+    *(
+        _DefaultAgentTemplate(
+            f"retail_{suffix}",
+            "retail",
+            40_000.0 + (index % 4) * 10_000.0,
+            1_000 + (index % 5) * 500,
+        )
+        for index, suffix in enumerate(
+            (
+                "a",
+                "b",
+                "c",
+                "d",
+                "e",
+                "f",
+                "g",
+                "h",
+                "i",
+                "j",
+                "k",
+                "l",
+                "m",
+                "n",
+                "o",
+                "p",
+            )
+        )
+    ),
+)
+
+
 def _default_agent_specs() -> list[SessionAgentSpec]:
     return [
         SessionAgentSpec.from_dict(
             {
-                "permission_profile": _permission_profile("retail_demo_a"),
-                "cash": 100_000.0,
-                "positions": {"demo_stock": 1_000},
+                "permission_profile": _permission_profile(
+                    template.agent_id,
+                    template.agent_type,
+                ),
+                "cash": template.cash,
+                "positions": {"demo_stock": template.position},
                 "mark_prices": {"demo_stock": 10.0},
             }
-        ),
-        SessionAgentSpec.from_dict(
-            {
-                "permission_profile": _permission_profile("retail_demo_b"),
-                "cash": 100_000.0,
-                "positions": {"demo_stock": 1_000},
-                "mark_prices": {"demo_stock": 10.0},
-            }
-        ),
+        )
+        for template in _DEFAULT_AGENT_TEMPLATES
     ]
 
 
-def _permission_profile(agent_id: str) -> dict[str, Any]:
+def _permission_profile(agent_id: str, agent_type: str) -> dict[str, Any]:
+    subscriptions = [
+        "Market_Price",
+        "Account_Snapshot:self",
+        "Tape_Alerts",
+        "End_of_Day",
+    ]
+    if agent_type in {"mutual_fund", "hot_money", "quant_algo", "national_team"}:
+        subscriptions.insert(0, "Official_News")
+    if agent_type in {"hot_money", "retail"}:
+        subscriptions.append("Forum_Rumors")
+
     return {
         "schema_version": SCHEMA_VERSION,
         "agent_id": agent_id,
-        "agent_type": "retail",
-        "subscriptions": [
-            "Official_News",
-            "Market_Price",
-            "Account_Snapshot:self",
-            "Forum_Rumors",
-        ],
+        "agent_type": agent_type,
+        "subscriptions": subscriptions,
         "publish_permissions": {
             "order_action": True,
             "ui_audit": True,
-            "forum_post": False,
+            "forum_post": agent_type == "hot_money",
         },
-        "official_news_scope": ["announcement", "news"],
+        "official_news_scope": _official_news_scope(agent_type),
     }
+
+
+def _official_news_scope(agent_type: str) -> list[str]:
+    if agent_type == "retail":
+        return []
+    if agent_type == "national_team":
+        return ["announcement", "news", "regulatory_notice"]
+    return ["announcement", "news"]
 
 
 def _create_runner() -> SessionRunner:
@@ -143,8 +202,8 @@ def _create_runner() -> SessionRunner:
         agent_profile_sets={"default_24": _default_agent_specs()},
         agent_runtime=AgentRuntime(
             default_actions={
-                "retail_demo_a": {"action_type": "hold"},
-                "retail_demo_b": {"action_type": "hold"},
+                template.agent_id: {"action_type": "hold"}
+                for template in _DEFAULT_AGENT_TEMPLATES
             }
         ),
     )

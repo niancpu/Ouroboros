@@ -44,6 +44,7 @@ export const eventTypeLabels: Record<EventType, string> = {
 export const agentTypeLabels: Record<AgentType, string> = {
   mutual_fund: "公募机构",
   hot_money: "游资",
+  quant_algo: "量化算法",
   retail: "散户",
   retail_cluster: "散户集群",
   institution: "机构",
@@ -145,6 +146,8 @@ export const agentNameLabels: Record<string, string> = {
   hot_money_c: "游资丙",
   hot_money_d: "游资丁",
   hot_money_e: "游资戊",
+  quant_algo_a: "量化甲",
+  quant_algo_b: "量化乙",
   retail_a: "散户一",
   retail_b: "散户二",
   retail_c: "散户三",
@@ -159,7 +162,10 @@ export const agentNameLabels: Record<string, string> = {
   retail_l: "散户十二",
   retail_m: "散户十三",
   retail_n: "散户十四",
+  retail_o: "散户十五",
+  retail_p: "散户十六",
   national_team_a: "国家队甲",
+  national_team_b: "国家队乙",
   retail_cluster: "散户群体",
   market: "市场",
 };

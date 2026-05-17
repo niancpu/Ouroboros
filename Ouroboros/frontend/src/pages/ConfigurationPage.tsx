@@ -15,9 +15,11 @@ interface ProfileDraft {
 }
 
 const DEFAULT_PROFILES: ProfileDraft[] = [
-  { label: "公募机构", count: 4, capitalWeight: 42, infoSensitivity: 6, riskAversion: 8 },
-  { label: "游资", count: 5, capitalWeight: 26, infoSensitivity: 9, riskAversion: 4 },
-  { label: "散户", count: 15, capitalWeight: 32, infoSensitivity: 7, riskAversion: 3 },
+  { label: "公募机构", count: 2, capitalWeight: 28, infoSensitivity: 7, riskAversion: 8 },
+  { label: "游资大佬", count: 2, capitalWeight: 12, infoSensitivity: 9, riskAversion: 4 },
+  { label: "量化游资", count: 2, capitalWeight: 9, infoSensitivity: 8, riskAversion: 5 },
+  { label: "国家队", count: 2, capitalWeight: 45, infoSensitivity: 6, riskAversion: 9 },
+  { label: "散户群体", count: 16, capitalWeight: 6, infoSensitivity: 5, riskAversion: 3 },
 ];
 
 const DEFAULT_FORM = {
