@@ -42,7 +42,13 @@ import {
   useSnapshot,
   useUI,
 } from "../state";
-import type { AgentSummary, MarketSnapshot, SnapshotData } from "../types/api";
+import type {
+  AgentSummary,
+  MarketSnapshot,
+  RuntimeTickStatePayload,
+  SnapshotData,
+  TickState,
+} from "../types/api";
 import type { ApiError } from "../api/errors";
 import type { ControlAction } from "../state/types";
 
@@ -55,6 +61,15 @@ const EMPTY_MARKET: MarketSnapshot = {
 };
 
 const EMPTY_SNAPSHOT_AGENTS: AgentSummary[] = [];
+
+interface RecommendationProgress {
+  state: TickState | "";
+  active: number;
+  completed: number;
+  timeout: number;
+  total: number;
+  canAdvance: boolean;
+}
 
 function connectionLabelFromPhase(phase: ReturnType<typeof useRealtime>["phase"]): string {
   switch (phase.kind) {
@@ -183,6 +198,16 @@ export function LivePage() {
   const displayTick = tickList[effectiveScrubIndex] ?? currentTickId ?? "";
 
   const isReplay = scrubIndex >= 0 && scrubIndex !== liveTickIndex;
+  const recommendationProgress = useMemo(
+    () => deriveRecommendationProgress({
+      tickEvents,
+      displayTick,
+      snapshotData,
+      sessionAgentCount: session.phase.kind === "active" ? session.phase.session.agent_count : agentRoster.length,
+      sessionActiveAgentCount: session.phase.kind === "active" ? session.phase.session.active_agent_count : agentRoster.length,
+    }),
+    [agentRoster.length, displayTick, session.phase, snapshotData, tickEvents],
+  );
 
   const startRealtime = useCallback(() => {
     if (session.phase.kind !== "active") return;
@@ -334,20 +359,23 @@ export function LivePage() {
           </aside>
 
           <section className="canvas-stack">
-            <Topology
-              agents={agentRoster}
-              graph={auditGraph}
-              agentLifecycleMap={lifecycleMap}
-              edgeMode={edgeMode}
-              hoveredAgentId={hoveredAgentId}
-              selectedAgentId={selectedAgentId}
-              selectedReasonRef={selectedReasonRef}
-              tickId={displayTick}
-              onHoverAgent={setHoveredAgentId}
-              onSelectAgent={ui.setSelectedAgentId}
-              onSelectReason={setSelectedReasonRef}
-              onEdgeModeChange={setEdgeMode}
-            />
+            <div className="topology-workbench">
+              <Topology
+                agents={agentRoster}
+                graph={auditGraph}
+                agentLifecycleMap={lifecycleMap}
+                edgeMode={edgeMode}
+                hoveredAgentId={hoveredAgentId}
+                selectedAgentId={selectedAgentId}
+                selectedReasonRef={selectedReasonRef}
+                tickId={displayTick}
+                onHoverAgent={setHoveredAgentId}
+                onSelectAgent={ui.setSelectedAgentId}
+                onSelectReason={setSelectedReasonRef}
+                onEdgeModeChange={setEdgeMode}
+              />
+              <RecommendationStatusPanel progress={recommendationProgress} />
+            </div>
             <TickScrubber
               currentIndex={effectiveScrubIndex}
               ticks={tickList}
@@ -372,4 +400,103 @@ export function LivePage() {
 
     </section>
   );
+}
+
+function RecommendationStatusPanel({ progress }: { progress: RecommendationProgress }) {
+  const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
+  const pending = Math.max(progress.total - progress.completed - progress.timeout, 0);
+  return (
+    <aside className="recommendation-status" aria-label="当前推荐进度">
+      <h2>推荐进度</h2>
+      <div className="recommendation-meter">
+        <span style={{ width: `${percent}%` }} />
+      </div>
+      <strong>{percent}%</strong>
+      <div className="recommendation-grid">
+        <span>阶段</span>
+        <b>{tickStateLabel(progress.state)}</b>
+        <span>完成</span>
+        <b>{progress.completed}/{progress.total}</b>
+        <span>等待</span>
+        <b>{pending}</b>
+        <span>超时</span>
+        <b>{progress.timeout}</b>
+        <span>活跃</span>
+        <b>{progress.active}</b>
+        <span>可推进</span>
+        <b>{progress.canAdvance ? "是" : "否"}</b>
+      </div>
+    </aside>
+  );
+}
+
+function deriveRecommendationProgress({
+  tickEvents,
+  displayTick,
+  snapshotData,
+  sessionAgentCount,
+  sessionActiveAgentCount,
+}: {
+  tickEvents: ReadonlyArray<{ tick_id: string; payload: unknown }>;
+  displayTick: string;
+  snapshotData: SnapshotData | null;
+  sessionAgentCount: number;
+  sessionActiveAgentCount: number;
+}): RecommendationProgress {
+  const event = pickTickStateEvent(tickEvents, displayTick);
+  if (event) {
+    const payload = event.payload as RuntimeTickStatePayload;
+    const active = normalizeCount(payload.active_agent_count);
+    const completed = normalizeCount(payload.completed_agent_count);
+    const timeout = normalizeCount(payload.timeout_agent_count);
+    return {
+      state: payload.state,
+      active,
+      completed,
+      timeout,
+      total: Math.max(active, completed + timeout, sessionAgentCount, 0),
+      canAdvance: Boolean(payload.can_advance),
+    };
+  }
+
+  const total = Math.max(sessionAgentCount, snapshotData?.agents.length ?? 0);
+  return {
+    state: snapshotData?.tick_state ?? "",
+    active: Math.max(sessionActiveAgentCount, total),
+    completed: snapshotData?.tick_state === "COMMIT_TICK" ? total : 0,
+    timeout: 0,
+    total,
+    canAdvance: snapshotData?.tick_state === "COMMIT_TICK",
+  };
+}
+
+function pickTickStateEvent(
+  tickEvents: ReadonlyArray<{ tick_id: string; payload: unknown; seq?: number }>,
+  displayTick: string,
+) {
+  const matching = displayTick ? tickEvents.filter((event) => event.tick_id === displayTick) : tickEvents;
+  return matching[matching.length - 1] ?? tickEvents[tickEvents.length - 1] ?? null;
+}
+
+function normalizeCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function tickStateLabel(state: TickState | ""): string {
+  switch (state) {
+    case "CHRONOS_SEED":
+      return "生成公开输入";
+    case "PAYLOAD_SPLIT":
+      return "分发输入";
+    case "AGENT_STEP":
+      return "智能体推荐";
+    case "MATCH_AND_CLEAR":
+      return "撮合清算";
+    case "COMMIT_TICK":
+      return "提交节拍";
+    case "FAILED":
+      return "失败";
+    default:
+      return "等待数据";
+  }
 }
