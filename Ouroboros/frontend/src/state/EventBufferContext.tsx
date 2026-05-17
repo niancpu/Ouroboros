@@ -22,6 +22,12 @@ const INITIAL: State = { events: [] };
 
 function appendOne(events: ServerEventEnvelope[], event: ServerEventEnvelope): ServerEventEnvelope[] {
   if (events.some((existing) => existing.seq === event.seq)) return events;
+  if (events.length > 0 && event.tick_id && events[events.length - 1].tick_id) {
+    const latestTickId = events[events.length - 1].tick_id;
+    if (event.tick_id < latestTickId) {
+      console.warn("EventBuffer: tick_id non-monotonic", { incoming: event.tick_id, latest: latestTickId, seq: event.seq });
+    }
+  }
   const next = events.concat(event);
   next.sort((a, b) => a.seq - b.seq);
   if (next.length > EVENT_BUFFER_MAX) {

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Crosshair, Eye, Network, RotateCcw } from "lucide-react";
 import type {
   AgentSummary,

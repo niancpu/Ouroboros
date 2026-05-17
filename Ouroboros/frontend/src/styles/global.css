@@ -980,6 +980,18 @@ td {
   letter-spacing: 0.05em;
 }
 
+.loading-dots::after {
+  content: "";
+  animation: loading-dots-anim 1.2s steps(1, end) infinite;
+}
+
+@keyframes loading-dots-anim {
+  0%   { content: "."; }
+  33%  { content: ".."; }
+  66%  { content: "..."; }
+  100% { content: ""; }
+}
+
 .live-empty {
   display: grid;
   place-items: center;
@@ -1052,6 +1064,20 @@ td {
 
 .state-loading .live-terminal-header::before {
   display: none;
+}
+
+.state-loading .live-terminal-header::after {
+  content: "■";
+  position: absolute;
+  right: 16px;
+  font-family: "Courier New", monospace;
+  font-size: 12px;
+  animation: blink-cursor 1s step-start infinite;
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
 }
 
 .state-empty .live-terminal-header {

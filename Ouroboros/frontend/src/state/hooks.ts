@@ -14,6 +14,9 @@ export interface ControlCommandHook {
   clearError(): void;
 }
 
+// module-level shared lock — prevents concurrent control commands across all useControlCommand instances
+const _activeSessionCommands = new Set<string>();
+
 export function useControlCommand(action: ControlAction): ControlCommandHook {
   const session = useSession();
   const ui = useUI();

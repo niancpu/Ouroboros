@@ -93,25 +93,41 @@ export function LivePage() {
     snapshot.phase.kind === "ready" ? snapshot.phase.snapshot : null;
 
   const agentRoster = snapshotData?.agents ?? EMPTY_SNAPSHOT_AGENTS;
+  const lifecycleEvents = useMemo(
+    () => events.events.filter((e) => e.type === "runtime.agent_lifecycle"),
+    [events.events],
+  );
   const lifecycleMap = useMemo(
-    () => deriveAgentLifecycleMap(snapshotData, events.events),
-    [snapshotData, events.events],
+    () => deriveAgentLifecycleMap(snapshotData, lifecycleEvents),
+    [snapshotData, lifecycleEvents],
+  );
+  const auditEvents = useMemo(
+    () => events.events.filter((e) => e.type === "audit.graph"),
+    [events.events],
   );
   const auditGraph = useMemo(
-    () => deriveAuditGraph(snapshotData, events.events),
-    [snapshotData, events.events],
+    () => deriveAuditGraph(snapshotData, auditEvents),
+    [snapshotData, auditEvents],
+  );
+  const tickEvents = useMemo(
+    () => events.events.filter((e) => e.type === "runtime.tick_state"),
+    [events.events],
   );
   const tickList = useMemo(
-    () => deriveTickList(snapshotData, events.events, LIVE_FALLBACK_TICKS),
-    [snapshotData, events.events],
+    () => deriveTickList(snapshotData, tickEvents, LIVE_FALLBACK_TICKS),
+    [snapshotData, tickEvents],
   );
-  const priceHistory = useMemo(() => derivePriceHistory(events.events), [events.events]);
+  const marketEvents = useMemo(
+    () => events.events.filter((e) => e.type === "market.price"),
+    [events.events],
+  );
+  const priceHistory = useMemo(() => derivePriceHistory(marketEvents), [marketEvents]);
   const latestMarket = useMemo(() => {
-    const event = pickLatestMarketPrice(events.events);
+    const event = pickLatestMarketPrice(marketEvents);
     if (event) return event.payload as MarketSnapshot;
     if (snapshotData) return snapshotData.market;
     return EMPTY_MARKET;
-  }, [events.events, snapshotData]);
+  }, [marketEvents, snapshotData]);
 
   const feedEvents = useMemo(
     () => pickEventsByType(events.events, [...FEED_EVENT_TYPES]),

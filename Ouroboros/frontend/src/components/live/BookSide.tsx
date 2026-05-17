@@ -4,7 +4,9 @@ interface BookSideProps {
   side: "buy" | "sell";
 }
 
-export function BookSide({ title, rows, side }: BookSideProps) {
+import { memo } from "react";
+
+export const BookSide = memo(function BookSide({ title, rows, side }: BookSideProps) {
   return (
     <section>
       <h3>{title}</h3>
@@ -16,4 +18,4 @@ export function BookSide({ title, rows, side }: BookSideProps) {
       ))}
     </section>
   );
-}
+});

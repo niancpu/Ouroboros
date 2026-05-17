@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Activity } from "lucide-react";
 import type { MarketSnapshot } from "../../types/api";
 import { EmptyState } from "../common/EmptyState";

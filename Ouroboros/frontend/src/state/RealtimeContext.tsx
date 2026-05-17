@@ -55,12 +55,25 @@ export interface RealtimeContextValue {
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 
 const PING_INTERVAL_MS = 25_000;
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_MAX_ATTEMPTS = 8;
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const [phase, dispatch] = useReducer(reducer, INITIAL);
   const clientIdRef = useRef<string>(readOrCreateClientId());
   const wsClientRef = useRef<FrontendRealtimeClient | null>(null);
   const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
+  const intentionalStopRef = useRef<boolean>(false);
+  const lastStartArgsRef = useRef<{
+    sessionId: string;
+    fromSeq: number;
+    handlers: RealtimeStartHandlers;
+  } | null>(null);
+  // Holds latest start fn reference to avoid stale closure in onClose
+  const reconnectRef = useRef<(() => void) | null>(null);
 
   const clearPing = useCallback(() => {
     if (pingTimerRef.current) {
@@ -69,19 +82,38 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const clearReconnect = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
   const stop = useCallback(
     (reason?: string) => {
+      intentionalStopRef.current = true;
+      clearReconnect();
       clearPing();
       wsClientRef.current?.close(1000, reason);
       wsClientRef.current = null;
       dispatch({ type: "closed", reason });
     },
-    [clearPing],
+    [clearPing, clearReconnect],
   );
 
   const start = useCallback(
     (sessionId: string, fromSeq: number, handlers: RealtimeStartHandlers) => {
+      intentionalStopRef.current = false;
+      reconnectAttemptsRef.current = 0;
+      lastStartArgsRef.current = { sessionId, fromSeq, handlers };
+
+      // Update reconnect ref so onClose closure always calls latest start
+      reconnectRef.current = () => start(sessionId, fromSeq, handlers);
+
       stop();
+      // stop() sets intentionalStopRef = true, reset after
+      intentionalStopRef.current = false;
+
       dispatch({ type: "connecting" });
       const client = new FrontendRealtimeClient({
         sessionId,
@@ -92,6 +124,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
       client.connect({
         onOpen: () => {
+          reconnectAttemptsRef.current = 0;
           dispatch({ type: "open" });
           try {
             client.subscribe([...REALTIME_TOPICS]);
@@ -121,6 +154,24 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         onClose: (closeEvent) => {
           clearPing();
           dispatch({ type: "closed", reason: closeEvent.reason });
+
+          if (
+            !intentionalStopRef.current &&
+            lastStartArgsRef.current &&
+            reconnectAttemptsRef.current < RECONNECT_MAX_ATTEMPTS
+          ) {
+            const attempts = reconnectAttemptsRef.current;
+            const delay = Math.min(
+              RECONNECT_BASE_MS * Math.pow(2, attempts),
+              RECONNECT_MAX_MS,
+            );
+            reconnectAttemptsRef.current = attempts + 1;
+            reconnectTimerRef.current = setTimeout(() => {
+              if (!intentionalStopRef.current && reconnectRef.current) {
+                reconnectRef.current();
+              }
+            }, delay);
+          }
         },
         onStatus: () => {
           /* phase mirroring is handled per-event above */
@@ -140,11 +191,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     return () => {
+      intentionalStopRef.current = true;
+      clearReconnect();
       clearPing();
       wsClientRef.current?.close(1000, "unmount");
       wsClientRef.current = null;
     };
-  }, [clearPing]);
+  }, [clearPing, clearReconnect]);
 
   const value = useMemo<RealtimeContextValue>(
     () => ({ phase, clientId: clientIdRef.current, start, stop, ack }),
