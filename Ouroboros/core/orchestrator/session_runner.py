@@ -423,11 +423,12 @@ class SessionRunner:
             {SessionStatus.CREATED, SessionStatus.RUNNING, SessionStatus.PAUSED},
             "stop",
         )
+        completion_reason = require_non_empty_str(reason, "reason")
         runtime.status = SessionStatus.COMPLETED
         return {
             "session_id": session_id,
             "status": runtime.status.value,
-            "reason": require_non_empty_str(reason, "reason"),
+            "completion_reason": completion_reason,
         }
 
     def get_frontend_snapshot(

@@ -3,9 +3,12 @@ from __future__ import annotations
 import unittest
 
 from Ouroboros.core.chronos import (
+    ChronosConfigurationError,
     Chronos,
     InMemoryChronosRepository,
     InMemoryOfficialNewsPublisher,
+    chronos_mode_from_env,
+    create_chronos_repository,
 )
 from Ouroboros.core.schemas import InternalVisibility, SchemaValidationError
 
@@ -58,6 +61,63 @@ def build_chronos() -> tuple[Chronos, InMemoryOfficialNewsPublisher]:
 
 
 class ChronosTests(unittest.TestCase):
+    def test_chronos_mode_defaults_to_in_memory(self) -> None:
+        self.assertEqual(chronos_mode_from_env({}), "in_memory")
+
+    def test_chronos_mode_accepts_explicit_in_memory_and_external(self) -> None:
+        self.assertEqual(
+            chronos_mode_from_env({"OUROBOROS_CHRONOS_MODE": "in_memory"}),
+            "in_memory",
+        )
+        self.assertEqual(
+            chronos_mode_from_env({"OUROBOROS_CHRONOS_MODE": "external"}),
+            "external",
+        )
+
+    def test_chronos_mode_rejects_unknown_value(self) -> None:
+        with self.assertRaisesRegex(ChronosConfigurationError, "OUROBOROS_CHRONOS_MODE"):
+            chronos_mode_from_env({"OUROBOROS_CHRONOS_MODE": "production"})
+
+    def test_explicit_demo_repository_uses_demo_seed(self) -> None:
+        repository = create_chronos_repository(mode="demo")
+
+        seed = repository.get_initial_market_seed("demo_stock")
+
+        self.assertEqual(seed.seed_id, "seed_demo_stock")
+
+    def test_explicit_in_memory_repository_accepts_test_seed(self) -> None:
+        repository = create_chronos_repository(
+            mode="in_memory",
+            initial_market_seeds={
+                "test_stock": {
+                    "schema_version": "v1",
+                    "seed_id": "seed_test_stock",
+                    "symbol": "test_stock",
+                    "previous_close": 15.0,
+                    "limit_up": 16.5,
+                    "limit_down": 13.5,
+                    "initial_l2_snapshot": {
+                        "bids": [["14.99", 10000]],
+                        "asks": [["15.01", 8000]],
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(
+            repository.get_initial_market_seed("test_stock").seed_id,
+            "seed_test_stock",
+        )
+
+    def test_real_and_external_repository_modes_fail_fast_without_demo_seed(self) -> None:
+        for mode in ("real", "external"):
+            with self.subTest(mode=mode):
+                with self.assertRaisesRegex(
+                    ChronosConfigurationError,
+                    "requires a real Chronos repository adapter",
+                ):
+                    create_chronos_repository(mode=mode)
+
     def test_release_facts_publishes_only_current_window_official_news(self) -> None:
         chronos, publisher = build_chronos()
 

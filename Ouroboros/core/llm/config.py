@@ -14,6 +14,8 @@ _ENV_KEYS = {
     "model": "OUROBOROS_LLM_MODEL",
     "provider_name": "OUROBOROS_LLM_PROVIDER",
 }
+LLM_PROVIDER_DETERMINISTIC_MOCK = "deterministic_mock"
+LLM_PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
 
 
 @dataclass(frozen=True)
@@ -23,7 +25,10 @@ class LLMConfig:
     api_key: str = ""
     base_url: str = ""
     model: str = "deterministic-mock"
-    provider_name: str = "deterministic_mock"
+    provider_name: str = LLM_PROVIDER_DETERMINISTIC_MOCK
+
+    def is_deterministic_mock_provider(self) -> bool:
+        return self.provider_name == LLM_PROVIDER_DETERMINISTIC_MOCK
 
     @classmethod
     def from_env(
@@ -45,9 +50,9 @@ class LLMConfig:
             model=source.get(_ENV_KEYS["model"], "deterministic-mock").strip()
             or "deterministic-mock",
             provider_name=source.get(
-                _ENV_KEYS["provider_name"], "deterministic_mock"
+                _ENV_KEYS["provider_name"], LLM_PROVIDER_DETERMINISTIC_MOCK
             ).strip()
-            or "deterministic_mock",
+            or LLM_PROVIDER_DETERMINISTIC_MOCK,
         )
 
 

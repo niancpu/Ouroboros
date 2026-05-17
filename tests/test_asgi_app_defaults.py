@@ -4,7 +4,15 @@ import unittest
 from collections import Counter
 from unittest.mock import patch
 
-from Ouroboros.asgi_app import _bus_mode_from_env, _create_runner, _default_agent_specs
+from Ouroboros.asgi_app import (
+    _bus_mode_from_env,
+    _create_chronos_repository,
+    _create_runner,
+    _default_agent_profiles,
+    _default_agent_specs,
+    _default_prompt_profiles,
+)
+from Ouroboros.core.chronos import ChronosConfigurationError
 from Ouroboros.core.llm import LLMConfig, LLMConfigurationError
 from Ouroboros.core.routing import BusConfigurationError
 from Ouroboros.core.schemas import OrderActionType, TickContext
@@ -44,9 +52,74 @@ class AsgiAppDefaultAgentTests(unittest.TestCase):
         self.assertEqual(specs[0].agent_id, "mutual_fund_a")
         self.assertEqual(runtime._default_actions, {})
 
+    def test_asgi_default_profiles_use_non_runtime_default_prompt_refs(self) -> None:
+        agent_profiles = _default_agent_profiles()
+        prompt_profiles = _default_prompt_profiles()
+
+        self.assertEqual(set(agent_profiles), {spec.agent_id for spec in _default_agent_specs()})
+        self.assertNotIn("runtime_default", prompt_profiles)
+        for spec in _default_agent_specs():
+            profile = agent_profiles[spec.agent_id]
+            with self.subTest(agent_id=spec.agent_id):
+                self.assertNotEqual(profile["prompt_profile_ref"], "runtime_default")
+                self.assertIn(profile["prompt_profile_ref"], prompt_profiles)
+                self.assertEqual(
+                    prompt_profiles[profile["prompt_profile_ref"]]["agent_type"],
+                    spec.permission_profile.agent_type.value,
+                )
+
+    def test_llm_runtime_factory_receives_default_prompt_profiles(self) -> None:
+        valid_config = LLMConfig(
+            api_key="test-api-key",
+            base_url="https://llm.example.test/v1",
+            model="test-model",
+            provider_name="openai_compatible",
+        )
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "Ouroboros.asgi_app.LLMConfig.from_env",
+            return_value=valid_config,
+        ):
+            runner = _create_runner()
+            runtime = runner._agent_runtime_factory()
+
+        self.assertEqual(
+            runtime._agent_profiles["mutual_fund_a"].prompt_profile_ref,
+            "prompt_mutual_fund_v1",
+        )
+        self.assertIn("prompt_mutual_fund_v1", runtime._prompt_profiles)
+
     def test_asgi_default_bus_mode_is_in_memory(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             self.assertEqual(_bus_mode_from_env(), "in_memory")
+
+    def test_asgi_default_chronos_mode_uses_demo_seed_repository(self) -> None:
+        repository = _create_chronos_repository({})
+
+        seed = repository.get_initial_market_seed("demo_stock")
+
+        self.assertEqual(seed.seed_id, "seed_demo_stock")
+
+    def test_asgi_explicit_in_memory_chronos_mode_uses_demo_seed_repository(self) -> None:
+        repository = _create_chronos_repository(
+            {"OUROBOROS_CHRONOS_MODE": "in_memory"}
+        )
+
+        seed = repository.get_initial_market_seed("demo_stock")
+
+        self.assertEqual(seed.seed_id, "seed_demo_stock")
+
+    def test_asgi_external_chronos_mode_fails_fast_without_adapter(self) -> None:
+        with self.assertRaisesRegex(ChronosConfigurationError, "real Chronos repository adapter"):
+            _create_chronos_repository({"OUROBOROS_CHRONOS_MODE": "external"})
+
+    def test_asgi_real_chronos_mode_fails_fast_without_demo_seed(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"OUROBOROS_CHRONOS_MODE": "real", "OUROBOROS_AGENT_MODE": "mock_hold"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ChronosConfigurationError, "real Chronos repository adapter"):
+                _create_runner()
 
     def test_asgi_redis_bus_mode_fails_fast(self) -> None:
         with patch.dict("os.environ", {"OUROBOROS_BUS_MODE": "redis"}, clear=True):

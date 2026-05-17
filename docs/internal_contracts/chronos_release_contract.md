@@ -15,6 +15,16 @@
 | 发布频道 | `Official_News` |
 | 禁止 | 释放未来事实、让 Agent 直查全量库、主动推进 Tick |
 
+## 运行模式边界
+
+`OUROBOROS_CHRONOS_MODE` 控制 ASGI 启动时使用哪类 Chronos 数据源。
+
+- `in_memory`：默认值，只能使用内存中的兼容/测试仓库。ASGI 当前会注入 `demo_stock` 演示初始市场种子，供本地测试和 demo 使用。
+- `demo`：`in_memory` 的显式别名，语义同上。
+- `external` / `real`：要求真实 Chronos repository adapter。当前代码库尚未实现该 adapter，因此必须启动失败，不得回退到 `demo_stock` 演示种子。
+
+内存仓库不是完整历史事实底座。它不代表已经接入历史新闻、公告、财报、监管函、历史量价、历史龙虎榜或向量检索；真实模式上线前必须补 adapter、数据权限边界和独立集成测试。
+
 ## 控制面接口
 
 ### `release_facts`

@@ -74,6 +74,8 @@ const LABEL_MAX_ZOOM_SCALE = 1.2;
 const LABEL_MIN_ZOOM_SCALE = 0.85;
 const LABEL_BASE_FONT_SIZE = 11;
 const LABEL_VIEWPORT_MARGIN = 24;
+const NODE_DRAG_MIN_DISTANCE = 3;
+const SOURCE_NODE_SYMBOL_SIZE = 14;
 
 const C = {
   accent: "#0037c8",
@@ -151,7 +153,9 @@ export function Topology({
   const overlayGroupRef = useRef<OverlayGroup | null>(null);
   const uiCallbackTimersRef = useRef<number[]>([]);
   const graphViewRef = useRef<GraphView>(GRAPH_DEFAULT_VIEW);
+  const nodePositionOverridesRef = useRef<Map<string, NodePoint>>(new Map());
   const [graphView, setGraphView] = useState<GraphView>(GRAPH_DEFAULT_VIEW);
+  const [nodePositionOverrides, setNodePositionOverrides] = useState<Map<string, NodePoint>>(() => new Map());
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const graphNodes: AuditGraphNode[] = graph.nodes.length
@@ -159,19 +163,20 @@ export function Topology({
     : fallbackNodesFromAgents(agents);
   const nodes: TopologyNode[] = graphNodes.map((node, index) => {
     const point = deterministicNodePoint(index, graphNodes.length);
+    const override = nodePositionOverrides.get(node.agent_id);
     return {
       ...node,
       belief_score: clampFinite(node.belief_score, 0),
       position_value: clampFinite(node.position_value, 0),
       risk_state: node.risk_state,
-      ...point,
+      ...(override ?? point),
     };
   });
   const visibleEdges = pruneGraphEdges(graph.edges, selectedAgentId, edgeMode);
   const spotlightIds = buildSpotlightIds(hoveredAgentId, graph.edges);
   const visualNodes = useMemo(
-    () => buildVisualNodes(nodes, visibleEdges),
-    [nodes, visibleEdges],
+    () => buildVisualNodes(nodes, visibleEdges, nodePositionOverrides),
+    [nodes, nodePositionOverrides, visibleEdges],
   );
   const visualNodeById = useMemo(
     () => new Map(visualNodes.map((node) => [node.id, node])),
@@ -436,6 +441,10 @@ export function Topology({
   }, [selectedAgentId, visualNodes]);
 
   useEffect(() => {
+    nodePositionOverridesRef.current = nodePositionOverrides;
+  }, [nodePositionOverrides]);
+
+  useEffect(() => {
     latestOnHoverAgentRef.current = onHoverAgent;
     latestOnSelectAgentRef.current = onSelectAgent;
     latestOnSelectReasonRef.current = onSelectReason;
@@ -496,7 +505,12 @@ export function Topology({
     if (!host) return;
     const chart = echarts.init(host, undefined, { renderer: "canvas" });
     chartRef.current = chart;
+    let suppressNextClick = false;
     const handleClick = (params: unknown) => {
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
       const item = params as {
         dataType?: string;
         data?: Partial<ChartNodeDatum & ChartEdgeDatum>;
@@ -567,6 +581,22 @@ export function Topology({
     let mouseDragPoint: { x: number; y: number } | null = null;
     let touchDragPoint: { x: number; y: number } | null = null;
     let pinchStart: { distance: number; zoom: number } | null = null;
+    let nodeDrag: {
+      id: string;
+      pointerId: number;
+      pointerType: string;
+      startClientX: number;
+      startClientY: number;
+      offset: [number, number];
+      moved: boolean;
+    } | null = null;
+    const moveNodeTo = (id: string, point: NodePoint) => {
+      const nextOverrides = new Map(nodePositionOverridesRef.current);
+      nextOverrides.set(id, point);
+      nodePositionOverridesRef.current = nextOverrides;
+      setNodePositionOverrides(nextOverrides);
+      scheduleGraphicOverlay();
+    };
     const resetPinch = () => {
       pinchStart = null;
       touchDragPoint = null;
@@ -582,8 +612,25 @@ export function Topology({
       zoomChart(currentView.zoom * factor);
     };
     const handlePointerDown = (event: PointerEvent) => {
+      const hostPixel = clientToHostPixel(host, event.clientX, event.clientY);
+      const hitNode = findVisualNodeAtPixel(chart, latestVisualNodesRef.current, hostPixel);
       if (event.pointerType === "mouse") {
         if (event.button !== 0) return;
+        if (hitNode) {
+          const pointerData = pixelToDataPoint(chart, hostPixel);
+          if (!pointerData) return;
+          nodeDrag = {
+            id: hitNode.id,
+            pointerId: event.pointerId,
+            pointerType: event.pointerType,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            offset: [hitNode.x - pointerData[0], hitNode.y - pointerData[1]],
+            moved: false,
+          };
+          host.setPointerCapture(event.pointerId);
+          return;
+        }
         mouseDragPoint = { x: event.clientX, y: event.clientY };
         host.setPointerCapture(event.pointerId);
         return;
@@ -595,10 +642,25 @@ export function Topology({
         pointerType: event.pointerType,
       });
       host.setPointerCapture(event.pointerId);
+      if (hitNode && pointers.size === 1) {
+        const pointerData = pixelToDataPoint(chart, hostPixel);
+        if (pointerData) {
+          nodeDrag = {
+            id: hitNode.id,
+            pointerId: event.pointerId,
+            pointerType: event.pointerType,
+            startClientX: event.clientX,
+            startClientY: event.clientY,
+            offset: [hitNode.x - pointerData[0], hitNode.y - pointerData[1]],
+            moved: false,
+          };
+        }
+      }
       if (pointers.size === 1) {
         touchDragPoint = { x: event.clientX, y: event.clientY };
       }
       if (pointers.size === 2) {
+        nodeDrag = null;
         const points = [...pointers.values()];
         pinchStart = {
           distance: pointDistance(points[0], points[1]),
@@ -607,6 +669,18 @@ export function Topology({
       }
     };
     const handlePointerMove = (event: PointerEvent) => {
+      if (nodeDrag?.pointerId === event.pointerId) {
+        event.preventDefault();
+        const pointerData = pixelToDataPoint(chart, clientToHostPixel(host, event.clientX, event.clientY));
+        if (!pointerData) return;
+        const movedDistance = Math.hypot(event.clientX - nodeDrag.startClientX, event.clientY - nodeDrag.startClientY);
+        nodeDrag.moved = nodeDrag.moved || movedDistance >= NODE_DRAG_MIN_DISTANCE;
+        moveNodeTo(nodeDrag.id, {
+          x: pointerData[0] + nodeDrag.offset[0],
+          y: pointerData[1] + nodeDrag.offset[1],
+        });
+        return;
+      }
       if (event.pointerType === "mouse") {
         if (!mouseDragPoint || (event.buttons & 1) !== 1) return;
         event.preventDefault();
@@ -640,6 +714,10 @@ export function Topology({
       touchDragPoint = { x: event.clientX, y: event.clientY };
     };
     const handlePointerEnd = (event: PointerEvent) => {
+      if (nodeDrag?.pointerId === event.pointerId) {
+        suppressNextClick = nodeDrag.moved;
+        nodeDrag = null;
+      }
       if (event.pointerType === "mouse") {
         mouseDragPoint = null;
       } else {
@@ -714,6 +792,8 @@ export function Topology({
   const resetView = useCallback(() => {
     const chart = chartRef.current;
     setGraphViewState(GRAPH_DEFAULT_VIEW, graphViewRef, setGraphView);
+    nodePositionOverridesRef.current = new Map();
+    setNodePositionOverrides(new Map());
     onSelectReason(null);
     if (chart && !chart.isDisposed()) {
       chart.setOption({
@@ -753,10 +833,12 @@ export function Topology({
   return (
     <div className="topology panel" ref={topologyRef}>
       <div className="section-title">
-        <span>推演画布</span>
-        <span className={visibleEdges.length ? "graph-health" : "graph-health muted"}>
-          {visibleEdges.length ? `${visibleEdges.length} 条关系` : "暂无关系链路"}
-        </span>
+        <div className="section-title-main">
+          <span>推演画布</span>
+          <span className={visibleEdges.length ? "graph-health" : "graph-health muted"}>
+            {visibleEdges.length ? `${visibleEdges.length} 条关系` : "暂无关系链路"}
+          </span>
+        </div>
         <div className="canvas-tools">
           <button type="button" onClick={() => onEdgeModeChange("current")}>当前节拍</button>
           <button type="button" onClick={() => onEdgeModeChange("selected")}>选中链路</button>
@@ -799,6 +881,33 @@ function clampFinite(value: unknown, fallback: number): number {
 
 function pointDistance(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function clientToHostPixel(host: HTMLElement, clientX: number, clientY: number): [number, number] {
+  const rect = host.getBoundingClientRect();
+  return [clientX - rect.left, clientY - rect.top];
+}
+
+function findVisualNodeAtPixel(
+  chart: ChartInstance,
+  visualNodes: ReadonlyArray<VisualNode>,
+  pixel: [number, number],
+): VisualNode | null {
+  let matchedNode: VisualNode | null = null;
+  let matchedDistance = Infinity;
+  for (const visualNode of visualNodes) {
+    const nodePixel = chart.convertToPixel({ seriesId: GRAPH_SERIES_ID }, [visualNode.x, visualNode.y]);
+    if (!Array.isArray(nodePixel) || nodePixel.length < 2) continue;
+    const distance = Math.hypot(pixel[0] - clampFinite(nodePixel[0], 0), pixel[1] - clampFinite(nodePixel[1], 0));
+    const radius = visualNode.kind === "source"
+      ? SOURCE_NODE_SYMBOL_SIZE / 2 + 8
+      : agentTypeVisual(visualNode.node.agent_type).size / 2 + 8;
+    if (distance <= radius && distance < matchedDistance) {
+      matchedNode = visualNode;
+      matchedDistance = distance;
+    }
+  }
+  return matchedNode;
 }
 
 function pixelToDataPoint(
@@ -1000,6 +1109,7 @@ type VisualNode = VisualAgentNode | VisualSourceNode;
 function buildVisualNodes(
   agentNodes: ReadonlyArray<TopologyNode>,
   edges: ReadonlyArray<AuditGraphEdge>,
+  positionOverrides: ReadonlyMap<string, NodePoint>,
 ): VisualNode[] {
   const visualNodes: VisualNode[] = agentNodes.map((node) => ({
     id: node.agent_id,
@@ -1016,11 +1126,12 @@ function buildVisualNodes(
   }
   [...sourceIds].forEach((id, index) => {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(sourceIds.size, 1);
+    const override = positionOverrides.get(id);
     visualNodes.push({
       id,
       kind: "source",
-      x: 50 + Math.cos(angle) * 12,
-      y: 50 + Math.sin(angle) * 10,
+      x: override?.x ?? 50 + Math.cos(angle) * 12,
+      y: override?.y ?? 50 + Math.sin(angle) * 10,
     });
   });
   return visualNodes;

@@ -129,9 +129,13 @@ export function LivePage() {
   const stepCmd = useControlCommand("step");
   const stopCmd = useControlCommand("stop");
 
-  const sessionId = session.phase.kind === "active" ? session.phase.session.session_id : null;
-  const sessionStatus = session.phase.kind === "active" ? session.phase.session.status : "";
-  const currentTickId = session.phase.kind === "active" ? session.phase.session.current_tick_id : "";
+  const sessionData =
+    session.phase.kind === "active" || session.phase.kind === "terminal"
+      ? session.phase.session
+      : null;
+  const sessionId = sessionData?.session_id ?? null;
+  const sessionStatus = sessionData?.status ?? "";
+  const currentTickId = sessionData?.current_tick_id ?? "";
   const canStart = sessionStatus === "created" || sessionStatus === "paused";
   const canPause = sessionStatus === "running";
   const canStep = sessionStatus === "created" || sessionStatus === "paused";
@@ -203,10 +207,10 @@ export function LivePage() {
       tickEvents,
       displayTick,
       snapshotData,
-      sessionAgentCount: session.phase.kind === "active" ? session.phase.session.agent_count : agentRoster.length,
-      sessionActiveAgentCount: session.phase.kind === "active" ? session.phase.session.active_agent_count : agentRoster.length,
+      sessionAgentCount: sessionData?.agent_count ?? agentRoster.length,
+      sessionActiveAgentCount: sessionData?.active_agent_count ?? agentRoster.length,
     }),
-    [agentRoster.length, displayTick, session.phase, snapshotData, tickEvents],
+    [agentRoster.length, displayTick, sessionData, snapshotData, tickEvents],
   );
 
   const startRealtime = useCallback(() => {

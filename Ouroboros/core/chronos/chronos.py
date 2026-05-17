@@ -7,6 +7,7 @@ publish initial market seeds to Agent-visible channels.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping, Protocol
@@ -31,6 +32,39 @@ from Ouroboros.core.schemas.common import (
     require_str_list,
     to_plain_data,
 )
+
+
+CHRONOS_MODE_ENV = "OUROBOROS_CHRONOS_MODE"
+CHRONOS_MODE_IN_MEMORY = "in_memory"
+CHRONOS_MODE_DEMO = "demo"
+CHRONOS_MODE_EXTERNAL = "external"
+CHRONOS_MODE_REAL = "real"
+CHRONOS_MODES = frozenset(
+    {
+        CHRONOS_MODE_IN_MEMORY,
+        CHRONOS_MODE_DEMO,
+        CHRONOS_MODE_EXTERNAL,
+        CHRONOS_MODE_REAL,
+    }
+)
+_DEMO_INITIAL_MARKET_SEEDS: dict[str, dict[str, Any]] = {
+    "demo_stock": {
+        "schema_version": SCHEMA_VERSION,
+        "seed_id": "seed_demo_stock",
+        "symbol": "demo_stock",
+        "previous_close": 10.0,
+        "limit_up": 11.0,
+        "limit_down": 9.0,
+        "initial_l2_snapshot": {
+            "bids": [["9.99", 1000], ["9.98", 1200]],
+            "asks": [["10.01", 1000], ["10.02", 1200]],
+        },
+    }
+}
+
+
+class ChronosConfigurationError(SchemaValidationError):
+    """Raised when Chronos runtime mode cannot be wired safely."""
 
 
 @dataclass(frozen=True)
@@ -131,7 +165,12 @@ class InMemoryOfficialNewsPublisher:
 
 @dataclass
 class InMemoryChronosRepository:
-    """Replaceable in-memory Chronos Data repository."""
+    """Compatibility/test Chronos repository backed only by caller-provided data.
+
+    This repository is for unit tests and local demo runs. It is not a real
+    Chronos Data source and does not imply historical news, filings, market
+    data, dragon-tiger lists, or vector retrieval are available.
+    """
 
     facts: list[ChronosFact] = field(default_factory=list)
     initial_market_seeds: dict[str, InitialMarketSeed] = field(default_factory=dict)
@@ -291,6 +330,58 @@ def _coerce_session_config(
     if isinstance(session_config, CreateSessionCommand):
         return session_config
     return CreateSessionCommand.from_dict(session_config)
+
+
+def chronos_mode_from_env(environ: Mapping[str, str] | None = None) -> str:
+    source = environ if environ is not None else os.environ
+    mode = (
+        source.get(CHRONOS_MODE_ENV, CHRONOS_MODE_IN_MEMORY).strip().lower()
+        or CHRONOS_MODE_IN_MEMORY
+    )
+    if mode not in CHRONOS_MODES:
+        allowed = ", ".join(sorted(CHRONOS_MODES))
+        raise ChronosConfigurationError(f"{CHRONOS_MODE_ENV} must be one of: {allowed}")
+    return mode
+
+
+def create_chronos_repository(
+    *,
+    mode: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    initial_market_seeds: Mapping[str, Mapping[str, Any]] | None = None,
+    facts: list[Mapping[str, Any]] | None = None,
+) -> InMemoryChronosRepository:
+    """Create the configured Chronos repository implementation.
+
+    ``in_memory`` and ``demo`` are explicit local/test modes. ``real`` and
+    ``external`` fail fast until a production Chronos adapter exists.
+    """
+
+    chronos_mode = chronos_mode_from_env(environ) if mode is None else _normalize_chronos_mode(mode)
+    if chronos_mode in {CHRONOS_MODE_IN_MEMORY, CHRONOS_MODE_DEMO}:
+        seed_source = initial_market_seeds
+        if seed_source is None and chronos_mode == CHRONOS_MODE_DEMO:
+            seed_source = _DEMO_INITIAL_MARKET_SEEDS
+        return InMemoryChronosRepository.from_dicts(
+            facts=facts,
+            initial_market_seeds=seed_source,
+        )
+    if chronos_mode in {CHRONOS_MODE_EXTERNAL, CHRONOS_MODE_REAL}:
+        raise ChronosConfigurationError(
+            f"{CHRONOS_MODE_ENV}={chronos_mode} requires a real Chronos repository "
+            "adapter, but this repository currently provides only the in-memory "
+            f"demo/test repository; set {CHRONOS_MODE_ENV}=in_memory or demo for "
+            "local tests or demos."
+        )
+    raise ChronosConfigurationError(f"unsupported Chronos mode: {chronos_mode}")
+
+
+def _normalize_chronos_mode(mode: str | None) -> str:
+    normalized = (mode or CHRONOS_MODE_IN_MEMORY).strip().lower() or CHRONOS_MODE_IN_MEMORY
+    if normalized not in CHRONOS_MODES:
+        allowed = ", ".join(sorted(CHRONOS_MODES))
+        raise ChronosConfigurationError(f"{CHRONOS_MODE_ENV} must be one of: {allowed}")
+    return normalized
 
 
 def _parse_iso_datetime(value: str, field_name: str) -> datetime:

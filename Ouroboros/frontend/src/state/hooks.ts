@@ -16,6 +16,7 @@ export interface ControlCommandHook {
 
 // module-level shared lock — prevents concurrent control commands across all useControlCommand instances
 const _activeSessionCommands = new Set<string>();
+const TERMINAL_SESSION_STATUSES = new Set(["completed", "failed"]);
 
 export function useControlCommand(action: ControlAction): ControlCommandHook {
   const session = useSession();
@@ -26,6 +27,11 @@ export function useControlCommand(action: ControlAction): ControlCommandHook {
   const run = useCallback(async (): Promise<void> => {
     if (session.phase.kind !== "active") return;
     const sessionId = session.phase.session.session_id;
+    const commandKey = sessionId;
+    if (_activeSessionCommands.has(commandKey)) return;
+    if (TERMINAL_SESSION_STATUSES.has(session.phase.session.status)) return;
+
+    _activeSessionCommands.add(commandKey);
     setInFlight(true);
     ui.clearControlError(action);
     try {
@@ -37,7 +43,7 @@ export function useControlCommand(action: ControlAction): ControlCommandHook {
         await rest.stepSession(sessionId);
       } else if (action === "stop") {
         const data = await rest.stopSession(sessionId);
-        session.markTerminal(data.completion_reason);
+        session.markTerminal(data);
         return;
       }
       await session.refreshSession();
@@ -47,6 +53,7 @@ export function useControlCommand(action: ControlAction): ControlCommandHook {
       session.recordControlError(apiError);
       throw apiError;
     } finally {
+      _activeSessionCommands.delete(commandKey);
       setInFlight(false);
     }
   }, [action, rest, session, ui]);

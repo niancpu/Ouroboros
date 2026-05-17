@@ -11,6 +11,7 @@ from Ouroboros.core.routing import (
     RoutingAccessError,
     SubscriberRef,
     SubscriberRole,
+    create_layer2_bus,
 )
 from Ouroboros.core.schemas import SchemaValidationError
 
@@ -141,6 +142,10 @@ class RoutingTests(unittest.TestCase):
     def test_explicit_redis_bus_mode_fails_fast(self) -> None:
         with self.assertRaisesRegex(BusConfigurationError, "no real Redis bus adapter"):
             ChannelRouter(session_id="sim_001", bus_mode="redis")
+
+    def test_layer2_bus_factory_redis_mode_fails_fast(self) -> None:
+        with self.assertRaisesRegex(BusConfigurationError, "OUROBOROS_BUS_MODE=redis"):
+            create_layer2_bus(mode="redis")
 
     def test_channel_router_does_not_hide_redis_mode_with_injected_bus(self) -> None:
         with patch.dict("os.environ", {"OUROBOROS_BUS_MODE": "redis"}, clear=True):

@@ -629,7 +629,7 @@ h3 {
 
 .live-columns {
   display: grid;
-  grid-template-columns: 22% 1fr 22%;
+  grid-template-columns: minmax(240px, 22%) minmax(0, 1fr) minmax(240px, 22%);
   height: calc(100vh - 140px);
   overflow: hidden;
 }
@@ -637,6 +637,7 @@ h3 {
 .left-sidebar {
   display: grid;
   grid-template-rows: max-content minmax(0, 1fr);
+  min-width: 0;
   overflow: hidden;
   border-right: var(--divider);
   background: var(--color-surface);
@@ -701,6 +702,7 @@ h3 {
 .canvas-stack {
   display: grid;
   grid-template-rows: 53% 76px minmax(220px, 1fr);
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -730,7 +732,8 @@ h3 {
 }
 
 .section-title {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   height: 40px;
@@ -744,10 +747,22 @@ h3 {
   flex-shrink: 0;
 }
 
+.section-title-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
+}
+
+.section-title-main > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .canvas-tools {
   display: flex;
   height: 100%;
-  margin-left: auto;
+  min-width: max-content;
   flex-shrink: 0;
 }
 
@@ -965,6 +980,7 @@ h3 {
 }
 
 .order-book {
+  min-width: 0;
   padding: 0;
   overflow: auto;
   border-left: var(--divider);
@@ -1241,7 +1257,8 @@ h3 {
   background: var(--color-surface);
 }
 
-.chronos-tracks section + section {
+.official-track,
+.rumor-track {
   border-right: var(--divider);
 }
 

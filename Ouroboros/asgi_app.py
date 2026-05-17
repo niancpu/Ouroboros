@@ -17,7 +17,15 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from Ouroboros.core.agents import AgentRuntime
-from Ouroboros.core.chronos import InMemoryChronosRepository
+from Ouroboros.core.chronos import (
+    CHRONOS_MODE_DEMO,
+    CHRONOS_MODE_EXTERNAL,
+    CHRONOS_MODE_IN_MEMORY,
+    CHRONOS_MODE_REAL,
+    InMemoryChronosRepository,
+    chronos_mode_from_env,
+    create_chronos_repository,
+)
 from Ouroboros.core.llm import LLMConfig, LLMGateway
 from Ouroboros.core.orchestrator import SessionAgentSpec, SessionRunner
 from Ouroboros.core.routing import (
@@ -161,6 +169,96 @@ def _default_agent_specs() -> list[SessionAgentSpec]:
     ]
 
 
+def _default_agent_profiles() -> dict[str, dict[str, Any]]:
+    return {
+        template.agent_id: {
+            "agent_id": template.agent_id,
+            "agent_type": template.agent_type,
+            "display_name": template.agent_id.replace("_", " ").title(),
+            "seat_alias": template.agent_id,
+            "strategy_bias": _strategy_bias(template.agent_type),
+            "risk_profile": _risk_profile(template.agent_type),
+            "prompt_profile_ref": _prompt_profile_id(template.agent_type),
+            "memory_namespace": f"mem_{template.agent_id}",
+            "permission_profile_ref": f"perm_{template.agent_type}_default",
+            "initial_asset_plan_ref": f"asset_{template.agent_id}",
+        }
+        for template in _DEFAULT_AGENT_TEMPLATES
+    }
+
+
+def _default_prompt_profiles() -> dict[str, dict[str, Any]]:
+    return {
+        _prompt_profile_id(agent_type): {
+            "schema_version": SCHEMA_VERSION,
+            "prompt_profile_id": _prompt_profile_id(agent_type),
+            "agent_type": agent_type,
+            "system_role": system_role,
+            "behavior_rules": behavior_rules,
+            "risk_rules": [
+                "Only use tick_context and own memory references.",
+                "Do not change cash, positions, settlement, or allowed actions.",
+            ],
+            "output_schema_ref": "agent_payload.v1",
+            "forbidden_claims": [
+                "I can access other agents' private state.",
+                "I can read hidden channels not present in tick_context.",
+            ],
+        }
+        for agent_type, system_role, behavior_rules in (
+            (
+                "mutual_fund",
+                "Institutional fund agent with portfolio discipline.",
+                ["Prefer measured position changes and evidence-backed decisions."],
+            ),
+            (
+                "hot_money",
+                "Short-term momentum agent focused on tape and public sentiment.",
+                ["React to market pressure and public forum signals when visible."],
+            ),
+            (
+                "quant_algo",
+                "Systematic agent focused on price, alerts, and execution quality.",
+                ["Prefer rule-consistent actions over narrative assumptions."],
+            ),
+            (
+                "national_team",
+                "Stabilization-oriented institutional agent.",
+                ["Prefer liquidity support and conservative risk posture."],
+            ),
+            (
+                "retail",
+                "Retail agent balancing public signals with account constraints.",
+                ["Keep decisions simple and respect limited information."],
+            ),
+        )
+    }
+
+
+def _prompt_profile_id(agent_type: str) -> str:
+    return f"prompt_{agent_type}_v1"
+
+
+def _strategy_bias(agent_type: str) -> dict[str, Any]:
+    return {
+        "mutual_fund": {"style": "fundamental", "turnover": "low"},
+        "hot_money": {"style": "momentum", "turnover": "high"},
+        "quant_algo": {"style": "systematic", "turnover": "medium"},
+        "national_team": {"style": "stabilization", "turnover": "low"},
+        "retail": {"style": "mixed", "turnover": "medium"},
+    }[agent_type]
+
+
+def _risk_profile(agent_type: str) -> dict[str, Any]:
+    return {
+        "mutual_fund": {"risk_appetite": "medium"},
+        "hot_money": {"risk_appetite": "high"},
+        "quant_algo": {"risk_appetite": "medium"},
+        "national_team": {"risk_appetite": "low"},
+        "retail": {"risk_appetite": "medium"},
+    }[agent_type]
+
+
 def _permission_profile(agent_id: str, agent_type: str) -> dict[str, Any]:
     subscriptions = [
         "Market_Price",
@@ -199,7 +297,19 @@ def _create_runner() -> SessionRunner:
     agent_mode = _agent_mode_from_env()
     _bus_mode_from_env()
     return SessionRunner(
-        chronos_repository=InMemoryChronosRepository.from_dicts(
+        chronos_repository=_create_chronos_repository(),
+        agent_profile_sets={"default_24": _default_agent_specs()},
+        agent_runtime_factory=_agent_runtime_factory(agent_mode),
+    )
+
+
+def _create_chronos_repository(
+    environ: Mapping[str, str] | None = None,
+) -> InMemoryChronosRepository:
+    mode = chronos_mode_from_env(os.environ if environ is None else environ)
+    if mode in {CHRONOS_MODE_IN_MEMORY, CHRONOS_MODE_DEMO}:
+        return create_chronos_repository(
+            mode=mode,
             initial_market_seeds={
                 "demo_stock": {
                     "schema_version": SCHEMA_VERSION,
@@ -214,10 +324,10 @@ def _create_runner() -> SessionRunner:
                     },
                 }
             },
-        ),
-        agent_profile_sets={"default_24": _default_agent_specs()},
-        agent_runtime_factory=_agent_runtime_factory(agent_mode),
-    )
+        )
+    if mode in {CHRONOS_MODE_EXTERNAL, CHRONOS_MODE_REAL}:
+        return create_chronos_repository(mode=mode)
+    return create_chronos_repository(mode=mode)
 
 
 def _agent_mode_from_env(environ: Mapping[str, str] | None = None) -> str:
@@ -245,7 +355,10 @@ def _agent_runtime_factory(agent_mode: str) -> Callable[[], AgentRuntime]:
             default_actions={
                 template.agent_id: {"action_type": "hold"}
                 for template in _DEFAULT_AGENT_TEMPLATES
-            }
+            },
+            agent_profiles=_default_agent_profiles(),
+            prompt_profiles=_default_prompt_profiles(),
+            allow_prompt_profile_fallback=True,
         )
     if agent_mode == _AGENT_MODE_LLM:
         return _create_llm_agent_runtime
@@ -258,7 +371,11 @@ def _create_llm_agent_runtime() -> AgentRuntime:
         require_provider_config=True,
     )
     gateway.validate_provider_config()
-    return AgentRuntime(llm_gateway=gateway)
+    return AgentRuntime(
+        llm_gateway=gateway,
+        agent_profiles=_default_agent_profiles(),
+        prompt_profiles=_default_prompt_profiles(),
+    )
 
 
 _runner = _create_runner()

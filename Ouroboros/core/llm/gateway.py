@@ -14,7 +14,11 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from Ouroboros.core.llm.config import LLMConfig
+from Ouroboros.core.llm.config import (
+    LLM_PROVIDER_DETERMINISTIC_MOCK,
+    LLM_PROVIDER_OPENAI_COMPATIBLE,
+    LLMConfig,
+)
 from Ouroboros.core.schemas import LLMRequest, SCHEMA_VERSION, SchemaValidationError
 from Ouroboros.core.schemas.common import reject_unknown_keys, require_non_empty_str
 
@@ -46,7 +50,7 @@ class LLMGateway:
         max_requests: int = 60,
         window_seconds: float = 60.0,
         clock: Callable[[], float] | None = None,
-        provider_name: str = "deterministic_mock",
+        provider_name: str = LLM_PROVIDER_DETERMINISTIC_MOCK,
         config: LLMConfig | None = None,
         require_provider_config: bool = False,
     ) -> None:
@@ -59,7 +63,9 @@ class LLMGateway:
         self._window_seconds = window_seconds
         self._clock = clock or time.monotonic
         self._provider_name = (
-            provider_name if provider_name != "deterministic_mock" else self.config.provider_name
+            provider_name
+            if provider_name != LLM_PROVIDER_DETERMINISTIC_MOCK
+            else self.config.provider_name
         )
         self._require_provider_config = require_provider_config
         self._window_started_at = self._clock()
@@ -157,7 +163,7 @@ class LLMGateway:
 
     def _should_call_provider(self) -> bool:
         return (
-            self._provider_name == "openai_compatible"
+            self._provider_name == LLM_PROVIDER_OPENAI_COMPATIBLE
             and bool(self.config.api_key)
             and bool(self.config.base_url)
         )
@@ -165,9 +171,10 @@ class LLMGateway:
     def _ensure_provider_ready(self) -> None:
         if not self._require_provider_config:
             return
-        if self._provider_name != "openai_compatible":
+        if self._provider_name != LLM_PROVIDER_OPENAI_COMPATIBLE:
             raise LLMConfigurationError(
-                "llm_provider_not_configured: set "
+                "llm_provider_not_configured: deterministic_mock is mock/test only; "
+                "set OUROBOROS_AGENT_MODE=mock_hold for mock agent runs or "
                 "OUROBOROS_LLM_PROVIDER=openai_compatible for llm agent mode"
             )
         missing = []

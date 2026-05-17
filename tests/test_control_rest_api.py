@@ -349,7 +349,14 @@ class ControlRestApiContractTests(unittest.TestCase):
                 request_id="req_stop",
             )
         )
-        self.assertEqual(stop_body["data"], {"session_id": "sim_created", "status": "completed"})
+        self.assertEqual(
+            stop_body["data"],
+            {
+                "session_id": "sim_created",
+                "status": "completed",
+                "completion_reason": "operator_stop",
+            },
+        )
 
         methods = [call["method"] for call in orchestrator.calls]
         for expected_method in [

@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { ApiError } from "../api/errors";
-import type { CreateSessionRequest, SessionData } from "../types/api";
+import type { CreateSessionRequest, SessionData, StopSessionData } from "../types/api";
 import { getRestClient } from "./restSingleton";
 import type { SessionPhase } from "./types";
 
@@ -19,7 +19,7 @@ type Action =
   | { type: "refresh/error"; error: ApiError }
   | { type: "control/error"; error: ApiError }
   | { type: "control/clear" }
-  | { type: "terminal"; session: SessionData; reason: string }
+  | { type: "terminal"; stop: StopSessionData }
   | { type: "reset" };
 
 const INITIAL: SessionPhase = { kind: "none", lastError: null };
@@ -34,7 +34,14 @@ function reducer(state: SessionPhase, action: Action): SessionPhase {
       return { kind: "none", lastError: action.error };
     case "refresh/success":
       if (state.kind !== "active") return state;
-      return { ...state, session: action.session };
+      return {
+        ...state,
+        session: {
+          ...action.session,
+          start_tick_id: action.session.start_tick_id ?? state.session.start_tick_id,
+          end_tick_id: action.session.end_tick_id ?? state.session.end_tick_id,
+        },
+      };
     case "refresh/error":
       if (state.kind !== "active") return state;
       return { ...state, lastError: action.error };
@@ -45,7 +52,15 @@ function reducer(state: SessionPhase, action: Action): SessionPhase {
       if (state.kind !== "active") return state;
       return { ...state, lastError: null };
     case "terminal":
-      return { kind: "terminal", session: action.session, reason: action.reason };
+      if (state.kind !== "active") return state;
+      return {
+        kind: "terminal",
+        session: {
+          ...state.session,
+          status: action.stop.status,
+        },
+        reason: action.stop.completion_reason,
+      };
     case "reset":
       return INITIAL;
     default:
@@ -60,7 +75,7 @@ export interface SessionContextValue {
   refreshSession(): Promise<void>;
   recordControlError(error: ApiError): void;
   clearControlError(): void;
-  markTerminal(reason: string): void;
+  markTerminal(stop: StopSessionData): void;
   reset(): void;
 }
 
@@ -118,9 +133,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const markTerminal = useCallback(
-    (reason: string) => {
+    (stop: StopSessionData) => {
       if (phase.kind !== "active") return;
-      dispatch({ type: "terminal", session: phase.session, reason });
+      dispatch({ type: "terminal", stop });
     },
     [phase],
   );

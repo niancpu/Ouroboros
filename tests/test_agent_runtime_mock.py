@@ -4,6 +4,7 @@ import unittest
 import json
 
 from Ouroboros.core.agents import AgentRuntime
+from Ouroboros.core.agents.runtime import PromptProfileConfigurationError
 from Ouroboros.core.schemas import (
     AgentPayload,
     MemoryReadRequest,
@@ -14,11 +15,64 @@ from Ouroboros.core.schemas import (
 )
 
 
+PROMPT_PROFILES = {
+    "prompt_retail_v1": {
+        "schema_version": "v1",
+        "prompt_profile_id": "prompt_retail_v1",
+        "agent_type": "retail",
+        "system_role": "Retail agent role.",
+        "behavior_rules": ["Use public retail-visible inputs."],
+        "risk_rules": ["Keep position risk bounded."],
+        "output_schema_ref": "agent_payload.v1",
+        "forbidden_claims": ["I can read hidden channels."],
+    },
+    "prompt_hot_money_v1": {
+        "schema_version": "v1",
+        "prompt_profile_id": "prompt_hot_money_v1",
+        "agent_type": "hot_money",
+        "system_role": "Hot money agent role.",
+        "behavior_rules": ["Use visible momentum and forum signals."],
+        "risk_rules": ["Do not claim private market access."],
+        "output_schema_ref": "agent_payload.v1",
+        "forbidden_claims": ["I can expand allowed actions."],
+    },
+}
+
+AGENT_PROFILES = {
+    "agent_a": {
+        "agent_id": "agent_a",
+        "agent_type": "retail",
+        "display_name": "Agent A",
+        "seat_alias": None,
+        "strategy_bias": {"style": "mixed"},
+        "risk_profile": {"risk_appetite": "medium"},
+        "prompt_profile_ref": "prompt_retail_v1",
+        "memory_namespace": "mem_agent_a",
+        "permission_profile_ref": "perm_retail_default",
+        "initial_asset_plan_ref": "asset_agent_a",
+    },
+    "agent_b": {
+        "agent_id": "agent_b",
+        "agent_type": "hot_money",
+        "display_name": "Agent B",
+        "seat_alias": None,
+        "strategy_bias": {"style": "momentum"},
+        "risk_profile": {"risk_appetite": "high"},
+        "prompt_profile_ref": "prompt_hot_money_v1",
+        "memory_namespace": "mem_agent_b",
+        "permission_profile_ref": "perm_hot_money_default",
+        "initial_asset_plan_ref": "asset_agent_b",
+    },
+}
+
+
 def tick_context(
     agent_id: str = "agent_a",
     *,
     tick_id: str = "2024-01-02T14:02:00+08:00",
+    agent_role: str = "retail",
     can_post_forum: bool = False,
+    allowed_actions: list[str] | None = None,
 ) -> TickContext:
     return TickContext.from_dict(
         {
@@ -26,7 +80,7 @@ def tick_context(
             "tick_id": tick_id,
             "trace_id": "trace_abc",
             "agent_id": agent_id,
-            "agent_role": "retail",
+            "agent_role": agent_role,
             "public_inputs": {
                 "market_price": {"symbol": "demo_stock", "last_price": 15.2},
                 "UI_Audit": {"thought": "must not leak"},
@@ -37,7 +91,8 @@ def tick_context(
                 "memory_refs": [{"summary": "private input stays input only"}],
             },
             "constraints": {
-                "allowed_actions": ["buy", "sell", "cancel", "hold", "post_forum"],
+                "allowed_actions": allowed_actions
+                or ["buy", "sell", "cancel", "hold", "post_forum"],
                 "deadline_ms": 30000,
                 "can_post_forum": can_post_forum,
             },
@@ -321,7 +376,10 @@ class AgentRuntimeMockTests(unittest.TestCase):
             )
 
     def test_llm_malformed_json_records_payload_parse_error_and_holds(self) -> None:
-        runtime = AgentRuntime(llm_gateway=MalformedGateway())
+        runtime = AgentRuntime(
+            llm_gateway=MalformedGateway(),
+            allow_prompt_profile_fallback=True,
+        )
 
         payload = runtime.act(tick_context("agent_a"))
 
@@ -329,12 +387,70 @@ class AgentRuntimeMockTests(unittest.TestCase):
         self.assertEqual(runtime.last_errors["agent_a"], "payload_parse_error")
 
     def test_llm_json_payload_is_parsed_into_agent_payload(self) -> None:
-        runtime = AgentRuntime(llm_gateway=PayloadGateway())
+        runtime = AgentRuntime(
+            llm_gateway=PayloadGateway(),
+            allow_prompt_profile_fallback=True,
+        )
 
         payload = runtime.act(tick_context("agent_a"))
 
         self.assertEqual(payload.action.action_type, OrderActionType.BUY)
         self.assertEqual(payload.action.quantity, 100)
+
+    def test_llm_request_uses_agent_specific_prompt_profile(self) -> None:
+        runtime = AgentRuntime(
+            agent_profiles=AGENT_PROFILES,
+            prompt_profiles=PROMPT_PROFILES,
+        )
+
+        retail_request = runtime._llm_request(tick_context("agent_a", agent_role="retail"))
+        hot_money_request = runtime._llm_request(
+            tick_context("agent_b", agent_role="hot_money")
+        )
+
+        self.assertEqual(retail_request["prompt_profile_id"], "prompt_retail_v1")
+        self.assertEqual(hot_money_request["prompt_profile_id"], "prompt_hot_money_v1")
+        retail_developer = json.loads(retail_request["messages"][1]["content"])
+        hot_money_developer = json.loads(hot_money_request["messages"][1]["content"])
+        self.assertEqual(
+            retail_developer["prompt_profile"]["system_role"],
+            "Retail agent role.",
+        )
+        self.assertEqual(
+            hot_money_developer["prompt_profile"]["system_role"],
+            "Hot money agent role.",
+        )
+
+    def test_prompt_profile_does_not_expand_permissions_or_channels(self) -> None:
+        runtime = AgentRuntime(
+            agent_profiles=AGENT_PROFILES,
+            prompt_profiles=PROMPT_PROFILES,
+        )
+        context = tick_context(
+            "agent_b",
+            agent_role="hot_money",
+            can_post_forum=False,
+            allowed_actions=["hold"],
+        )
+
+        request = runtime._llm_request(context)
+        developer_payload = json.loads(request["messages"][1]["content"])
+        serialized_prompt = json.dumps(developer_payload, sort_keys=True)
+
+        self.assertEqual(
+            developer_payload["permission_boundary"]["allowed_actions"],
+            ["hold"],
+        )
+        self.assertFalse(developer_payload["permission_boundary"]["can_post_forum"])
+        self.assertNotIn("subscriptions", serialized_prompt)
+        self.assertNotIn("input_channels", serialized_prompt)
+        self.assertNotIn("Official_News", serialized_prompt)
+
+    def test_missing_prompt_profile_fails_fast_in_llm_mode(self) -> None:
+        runtime = AgentRuntime(llm_gateway=PayloadGateway())
+
+        with self.assertRaisesRegex(PromptProfileConfigurationError, "missing prompt profile"):
+            runtime.act(tick_context("agent_a"))
 
 
 class MalformedGateway:

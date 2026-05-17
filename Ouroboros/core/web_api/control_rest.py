@@ -488,6 +488,9 @@ class ControlRestApi:
         )
         response_data = _response_mapping(data)
         response_data.setdefault("session_id", session_id)
+        if "completion_reason" not in response_data and "reason" in response_data:
+            response_data["completion_reason"] = response_data.pop("reason")
+        response_data.setdefault("completion_reason", reason)
         return self._success_response(
             request_id=request_id,
             trace_id=trace_id,

@@ -101,6 +101,17 @@ class LLMGatewayTests(unittest.TestCase):
         self.assertEqual(content["action"]["action_type"], "hold")
         self.assertEqual(content["agent_id"], "agent_a")
 
+    def test_deterministic_mock_provider_remains_explicitly_usable_for_tests(self) -> None:
+        config_type = self._llm_config_type()
+        config = config_type(provider_name="deterministic_mock")
+        self.assertTrue(config.is_deterministic_mock_provider())
+
+        gateway = LLMGateway(config=config, require_provider_config=False)
+
+        output = gateway.complete(LLMRequest.from_dict(llm_request()))
+
+        self.assertEqual(output["provider"], "deterministic_mock")
+
     def test_strict_provider_config_rejects_unconfigured_mock_provider(self) -> None:
         config_type = self._llm_config_type()
         gateway = LLMGateway(
@@ -108,7 +119,7 @@ class LLMGatewayTests(unittest.TestCase):
             require_provider_config=True,
         )
 
-        with self.assertRaisesRegex(LLMConfigurationError, "OUROBOROS_LLM_PROVIDER"):
+        with self.assertRaisesRegex(LLMConfigurationError, "mock_hold"):
             gateway.complete(LLMRequest.from_dict(llm_request()))
 
     def test_strict_provider_config_rejects_missing_connection_fields(self) -> None:

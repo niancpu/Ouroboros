@@ -117,9 +117,10 @@ function buildTickRange(start: string | undefined, end: string | undefined): str
 
 function formatTickId(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
+  const chinaTime = new Date(date.getTime() + 8 * 60 * 60 * 1000);
   return [
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}+08:00`,
+    `${chinaTime.getUTCFullYear()}-${pad(chinaTime.getUTCMonth() + 1)}-${pad(chinaTime.getUTCDate())}`,
+    `T${pad(chinaTime.getUTCHours())}:${pad(chinaTime.getUTCMinutes())}:${pad(chinaTime.getUTCSeconds())}+08:00`,
   ].join("");
 }
 
@@ -134,6 +135,7 @@ export function ChronosPage() {
   const session = useSession();
   const snapshot = useSnapshot();
   const events = useEvents();
+  const bufferedEvents = events.events;
   const appendBatch = events.appendBatch;
   const [replayStatus, setReplayStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [replayEvents, setReplayEvents] = useState<ServerEventEnvelope[]>([]);
@@ -190,9 +192,9 @@ export function ChronosPage() {
   const visibleEvents = useMemo(() => {
     const bySeq = new Map<number, ServerEventEnvelope>();
     for (const event of replayEvents) bySeq.set(event.seq, event);
-    for (const event of events.events) bySeq.set(event.seq, event);
+    for (const event of bufferedEvents) bySeq.set(event.seq, event);
     return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
-  }, [events.events, replayEvents]);
+  }, [bufferedEvents, replayEvents]);
 
   const tickList = useMemo(
     () => {
