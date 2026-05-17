@@ -5,6 +5,20 @@ import { DossierPage } from "./pages/DossierPage";
 import { EntityPage } from "./pages/EntityPage";
 import { LivePage } from "./pages/LivePage";
 import { useSession, useUI } from "./state";
+import { type ModuleKey } from "./config/constants";
+import { type ReactNode } from "react";
+
+const MODULE_PAGES: ReadonlyArray<{
+  key: ModuleKey;
+  label: string;
+  render: () => ReactNode;
+}> = [
+  { key: "CONFIG", label: "新建推演", render: () => <ConfigurationPage /> },
+  { key: "LIVE", label: "实时推演", render: () => <LivePage /> },
+  { key: "ENTITY", label: "智能体解剖室", render: () => <EntityPage /> },
+  { key: "CHRONOS", label: "时间轴剧本管理", render: () => <ChronosPage /> },
+  { key: "DOSSIER", label: "崩塌报告", render: () => <DossierPage /> },
+];
 
 export function App() {
   const ui = useUI();
@@ -22,11 +36,20 @@ export function App() {
         sessionStatus={sessionStatus}
       />
       <main className="workspace">
-        {ui.activeModule === "CONFIG" && <ConfigurationPage />}
-        {ui.activeModule === "LIVE" && <LivePage />}
-        {ui.activeModule === "ENTITY" && <EntityPage />}
-        {ui.activeModule === "CHRONOS" && <ChronosPage />}
-        {ui.activeModule === "DOSSIER" && <DossierPage />}
+        {MODULE_PAGES.map((page) => {
+          const isActive = ui.activeModule === page.key;
+          return (
+            <div
+              aria-label={page.label}
+              className="workspace-pane"
+              data-module={page.key}
+              hidden={!isActive}
+              key={page.key}
+            >
+              {page.render()}
+            </div>
+          );
+        })}
       </main>
     </div>
   );
