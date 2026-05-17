@@ -1,5 +1,4 @@
 import { memo } from "react";
-import { Activity } from "lucide-react";
 import type { OHLCVBar } from "../../utils/derive";
 import { EmptyState } from "../common/EmptyState";
 
@@ -13,7 +12,6 @@ export const MarketCurves = memo(function MarketCurves({ bars, lastPrice }: Mark
     return (
       <div className="market-curves panel">
         <div className="section-title">
-          <Activity size={16} />
           <span>K线 / 成交量</span>
         </div>
         <EmptyState label="NO PRICE DATA" />
@@ -50,7 +48,6 @@ export const MarketCurves = memo(function MarketCurves({ bars, lastPrice }: Mark
   return (
     <div className="market-curves panel">
       <div className="section-title">
-        <Activity size={16} />
         <span>K线 / 成交量</span>
         <span style={{ marginLeft: "auto", fontSize: 12, fontFamily: "'JetBrains Mono', 'Courier New', monospace" }}>
           {safeNumber(lastPrice).toFixed(2)}

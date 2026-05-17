@@ -15,10 +15,16 @@ export function Radar({ values }: RadarProps) {
 
   return (
     <svg className="radar" viewBox="0 0 100 100" role="img" aria-label="智能体参数雷达图">
-      <polygon points="50,16 84,50 50,84 16,50" fill="none" stroke="currentColor" strokeWidth="0.5" opacity={0.3} />
-      <polygon points="50,28 72,50 50,72 28,50" fill="none" stroke="currentColor" strokeWidth="0.5" opacity={0.3} />
-      <polygon points={`${points} ${points.split(" ")[0]}`} fill="var(--color-accent, #1e3a5f)" fillOpacity="0.1" stroke="none" />
+      <circle cx="50" cy="50" r="34" fill="none" stroke="currentColor" strokeWidth="0.35" strokeDasharray="2 2" opacity={0.6} />
+      <circle cx="50" cy="50" r="22" fill="none" stroke="currentColor" strokeWidth="0.35" opacity={0.4} />
+      <line x1="50" y1="12" x2="50" y2="88" stroke="currentColor" strokeWidth="0.3" opacity={0.35} />
+      <line x1="12" y1="50" x2="88" y2="50" stroke="currentColor" strokeWidth="0.3" opacity={0.35} />
       <polyline points={`${points} ${points.split(" ")[0]}`} fill="none" stroke="var(--color-accent, #1e3a5f)" strokeWidth="1.2" />
+      <circle cx="50" cy="16" r="1.5" fill="var(--color-accent, #1e3a5f)" />
+      <text x="52" y="18" fontSize="4" fill="var(--color-accent, #1e3a5f)">[N1]</text>
+      <text x="16" y="46" fontSize="4" fill="var(--color-accent, #1e3a5f)">[N2]</text>
+      <text x="48" y="88" fontSize="4" fill="var(--color-accent, #1e3a5f)">[N3]</text>
+      <text x="76" y="46" fontSize="4" fill="var(--color-accent, #1e3a5f)">[N4]</text>
     </svg>
   );
 }

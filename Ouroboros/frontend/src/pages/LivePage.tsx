@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Network,
   Pause,
   Play,
   RotateCcw,
@@ -44,6 +43,8 @@ import {
   useUI,
 } from "../state";
 import type { AgentSummary, MarketSnapshot, SnapshotData } from "../types/api";
+import type { ApiError } from "../api/errors";
+import type { ControlAction } from "../state/types";
 
 const EMPTY_MARKET: MarketSnapshot = {
   symbol: "demo_stock",
@@ -72,6 +73,34 @@ function connectionLabelFromPhase(phase: ReturnType<typeof useRealtime>["phase"]
   }
 }
 
+function controlErrorMessage(action: ControlAction, error: ApiError, sessionStatus: string): string {
+  if (error.code === "SESSION_STATE_CONFLICT") {
+    if (sessionStatus === "completed") {
+      return "本次推演已经结束，不能继续启动或推进。需要继续观察请新建一场推演。";
+    }
+    if (action === "start" && sessionStatus === "running") {
+      return "推演已经在运行中，不需要重复启动。";
+    }
+    if (action === "step" && sessionStatus === "running") {
+      return "推演正在连续运行，不能同时单步推进。请先暂停后再单步。";
+    }
+    if (action === "pause") {
+      return "当前推演不在运行中，不能暂停。";
+    }
+    return "当前会话状态不允许执行这个操作，请先确认顶部的推演状态。";
+  }
+
+  if (error.code === "SESSION_NOT_FOUND") {
+    return "当前会话不存在或后端已重启，请回到初始化页重新创建会话。";
+  }
+
+  if (error.code === "INTERNAL_ERROR") {
+    return "后端处理失败，请稍后重试；如果连续出现，请检查后端服务日志。";
+  }
+
+  return error.message || "操作失败，请稍后重试。";
+}
+
 export function LivePage() {
   const session = useSession();
   const snapshot = useSnapshot();
@@ -88,6 +117,11 @@ export function LivePage() {
   const sessionId = session.phase.kind === "active" ? session.phase.session.session_id : null;
   const sessionStatus = session.phase.kind === "active" ? session.phase.session.status : "";
   const currentTickId = session.phase.kind === "active" ? session.phase.session.current_tick_id : "";
+  const canStart = sessionStatus === "created" || sessionStatus === "paused";
+  const canPause = sessionStatus === "running";
+  const canStep = sessionStatus === "created" || sessionStatus === "paused";
+  const canStop =
+    sessionStatus === "created" || sessionStatus === "running" || sessionStatus === "paused";
 
   const snapshotData: SnapshotData | null =
     snapshot.phase.kind === "ready" ? snapshot.phase.snapshot : null;
@@ -173,7 +207,7 @@ export function LivePage() {
 
   useEffect(() => {
     if (snapshot.phase.kind !== "ready") return;
-    if (realtime.phase.kind !== "idle") return;
+    if (realtime.phase.kind !== "idle" && realtime.phase.kind !== "closed") return;
     startRealtime();
   }, [snapshot.phase, realtime.phase, startRealtime]);
 
@@ -200,7 +234,7 @@ export function LivePage() {
           <span>NO SESSION</span>
         </header>
         <div className="live-empty">
-          <EmptyState label="NO SESSION // 请在初始化页创建会话" />
+          <EmptyState label="请在初始化页创建会话" />
         </div>
       </section>
     );
@@ -211,23 +245,22 @@ export function LivePage() {
   return (
     <section className={`live-page ${visualClass}`}>
       <header className="terminal-header live-terminal-header">
-        <span>Ouroboros 实时推演</span>
         <span>会话 {sessionId ? displaySession(sessionId) : "—"}</span>
         <span>节拍 {formatTick(displayTick) || "—"}</span>
-        <span>{isReplay ? "REPLAY TICK" : visual === "recovering" ? "RECOVERING SNAPSHOT" : labelFrom(sessionStatusLabels, sessionStatus)}</span>
-        <span>{labelFrom(connectionLabels, connectionLabelFromPhase(realtime.phase))}</span>
+        <span>状态 {isReplay ? "REPLAY TICK" : visual === "recovering" ? "RECOVERING SNAPSHOT" : labelFrom(sessionStatusLabels, sessionStatus)}</span>
+        <span>连接 {labelFrom(connectionLabels, connectionLabelFromPhase(realtime.phase))}</span>
         <div className="control-buttons">
-          <IconButton label="开始" onClick={() => { void startCmd.run(); }} disabled={startCmd.inFlight}>
-            <Play size={16} />
+          <IconButton label="开始" onClick={() => { void startCmd.run(); }} disabled={!canStart || startCmd.inFlight}>
+            <Play size={14} />
           </IconButton>
-          <IconButton label="暂停" onClick={() => { void pauseCmd.run(); }} disabled={pauseCmd.inFlight}>
-            <Pause size={16} />
+          <IconButton label="暂停" onClick={() => { void pauseCmd.run(); }} disabled={!canPause || pauseCmd.inFlight}>
+            <Pause size={14} />
           </IconButton>
-          <IconButton label="单步推进" onClick={() => { void stepCmd.run(); }} disabled={stepCmd.inFlight}>
-            <StepForward size={16} />
+          <IconButton label="单步推进" onClick={() => { void stepCmd.run(); }} disabled={!canStep || stepCmd.inFlight}>
+            <StepForward size={14} />
           </IconButton>
-          <IconButton label="停止" onClick={() => { void stopCmd.run(); }} disabled={stopCmd.inFlight}>
-            <Square size={16} />
+          <IconButton label="停止" onClick={() => { void stopCmd.run(); }} disabled={!canStop || stopCmd.inFlight}>
+            <Square size={14} />
           </IconButton>
           <IconButton
             label="恢复快照"
@@ -238,24 +271,24 @@ export function LivePage() {
               }
             }}
           >
-            <RotateCcw size={16} />
+            <RotateCcw size={14} />
           </IconButton>
         </div>
       </header>
 
       {(startCmd.error || pauseCmd.error || stepCmd.error || stopCmd.error) && (
         <div className="control-error-stack">
-          {startCmd.error && <ErrorBar code={startCmd.error.code} message={`[start] ${startCmd.error.message}`} onDismiss={startCmd.clearError} />}
-          {pauseCmd.error && <ErrorBar code={pauseCmd.error.code} message={`[pause] ${pauseCmd.error.message}`} onDismiss={pauseCmd.clearError} />}
-          {stepCmd.error && <ErrorBar code={stepCmd.error.code} message={`[step] ${stepCmd.error.message}`} onDismiss={stepCmd.clearError} />}
-          {stopCmd.error && <ErrorBar code={stopCmd.error.code} message={`[stop] ${stopCmd.error.message}`} onDismiss={stopCmd.clearError} />}
+          {startCmd.error && <ErrorBar code={startCmd.error.code} message={controlErrorMessage("start", startCmd.error, sessionStatus)} onDismiss={startCmd.clearError} />}
+          {pauseCmd.error && <ErrorBar code={pauseCmd.error.code} message={controlErrorMessage("pause", pauseCmd.error, sessionStatus)} onDismiss={pauseCmd.clearError} />}
+          {stepCmd.error && <ErrorBar code={stepCmd.error.code} message={controlErrorMessage("step", stepCmd.error, sessionStatus)} onDismiss={stepCmd.clearError} />}
+          {stopCmd.error && <ErrorBar code={stopCmd.error.code} message={controlErrorMessage("stop", stopCmd.error, sessionStatus)} onDismiss={stopCmd.clearError} />}
         </div>
       )}
 
       {snapshot.phase.kind === "error" && (
         <div className="live-empty">
           <ErrorBar code={snapshot.phase.error.code} message={`[snapshot] ${snapshot.phase.error.message}`} />
-          <EmptyState label="SNAPSHOT UNAVAILABLE // 请稍后重试或检查后端" />
+          <EmptyState label="快照不可用，请稍后重试" />
         </div>
       )}
 
@@ -335,10 +368,6 @@ export function LivePage() {
         </div>
       )}
 
-      <header className="live-footer">
-        <span>显示节拍：<Network size={12} /> {formatTick(displayTick) || "—"}</span>
-        {isReplay && <span className="replay-badge">REPLAY</span>}
-      </header>
     </section>
   );
 }

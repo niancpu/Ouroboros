@@ -17,7 +17,7 @@ const tickAlert = tickId;
 const tickClose = "2024-01-02T15:00:00+08:00";
 
 const agentRoster: AgentSummary[] = [
-  // mutual_fund: 4 agents (a/b/c active+normal, d suspended+normal)
+  // default_24: mutual_fund x2, hot_money x2, quant_algo x2, retail x16, national_team x2.
   {
     agent_id: "mutual_fund_a",
     agent_type: "mutual_fund",
@@ -35,22 +35,22 @@ const agentRoster: AgentSummary[] = [
     position_value: 4800000,
   },
   {
-    agent_id: "mutual_fund_c",
-    agent_type: "mutual_fund",
+    agent_id: "quant_algo_a",
+    agent_type: "quant_algo",
     lifecycle_state: "active",
     risk_state: "normal",
     equity: 5400000,
     position_value: 3900000,
   },
   {
-    agent_id: "mutual_fund_d",
-    agent_type: "mutual_fund",
+    agent_id: "quant_algo_b",
+    agent_type: "quant_algo",
     lifecycle_state: "suspended",
     risk_state: "normal",
     equity: 4100000,
     position_value: 3200000,
   },
-  // hot_money: 5 agents (a-d warning, e normal)
+  // hot_money: 2 agents
   {
     agent_id: "hot_money_a",
     agent_type: "hot_money",
@@ -68,30 +68,30 @@ const agentRoster: AgentSummary[] = [
     position_value: 2100000,
   },
   {
-    agent_id: "hot_money_c",
-    agent_type: "hot_money",
+    agent_id: "national_team_a",
+    agent_type: "national_team",
     lifecycle_state: "active",
-    risk_state: "warning",
+    risk_state: "normal",
     equity: 2120000,
     position_value: 1750000,
   },
   {
-    agent_id: "hot_money_d",
-    agent_type: "hot_money",
+    agent_id: "national_team_b",
+    agent_type: "national_team",
     lifecycle_state: "active",
-    risk_state: "warning",
+    risk_state: "normal",
     equity: 1820000,
     position_value: 1500000,
   },
   {
-    agent_id: "hot_money_e",
-    agent_type: "hot_money",
+    agent_id: "retail_o",
+    agent_type: "retail",
     lifecycle_state: "active",
     risk_state: "normal",
     equity: 1620000,
     position_value: 1180000,
   },
-  // retail: 14 agents - a..i normal, j/k warning, l margin_call, m liquidating, n terminated
+  // retail: 16 agents - a..i/o/p normal, j/k warning, l margin_call, m liquidating, n terminated
   {
     agent_id: "retail_a",
     agent_type: "retail",
@@ -204,14 +204,13 @@ const agentRoster: AgentSummary[] = [
     equity: 50000,
     position_value: 40000,
   },
-  // national_team: 1 agent
   {
-    agent_id: "national_team_a",
-    agent_type: "national_team",
+    agent_id: "retail_p",
+    agent_type: "retail",
     lifecycle_state: "active",
     risk_state: "normal",
-    equity: 50000000,
-    position_value: 30000000,
+    equity: 500000,
+    position_value: 300000,
   },
 ];
 
@@ -220,13 +219,12 @@ const agentRoster: AgentSummary[] = [
 const beliefByAgent: Record<string, number> = {
   mutual_fund_a: 0.22,
   mutual_fund_b: 0.28,
-  mutual_fund_c: 0.31,
-  mutual_fund_d: 0.18,
+  quant_algo_a: 0.54,
+  quant_algo_b: 0.47,
   hot_money_a: 0.86,
   hot_money_b: 0.81,
-  hot_money_c: 0.78,
-  hot_money_d: 0.74,
-  hot_money_e: 0.69,
+  national_team_a: 0.48,
+  national_team_b: 0.44,
   retail_a: 0.62,
   retail_b: 0.58,
   retail_c: 0.66,
@@ -241,7 +239,8 @@ const beliefByAgent: Record<string, number> = {
   retail_l: 0.42,
   retail_m: 0.25,
   retail_n: 0.15,
-  national_team_a: 0.48,
+  retail_o: 0.52,
+  retail_p: 0.49,
 };
 
 const auditNodes: AuditGraphNode[] = agentRoster.map((agent) => ({
@@ -291,35 +290,35 @@ const auditEdges: AuditGraphEdge[] = [
     public_reason: "游资乙转发热点帖，散户六跟单。",
   },
   {
-    source: "hot_money_c",
+    source: "hot_money_a",
     target: "retail_e",
     weight: 0.41,
     reason_ref: "forum_post_201",
     public_reason: "公开股吧热度上行，散户五入场。",
   },
   {
-    source: "hot_money_c",
+    source: "hot_money_b",
     target: "retail_d",
     weight: 0.38,
     reason_ref: "forum_post_201",
     public_reason: "短线讨论扩散，散户四提高仓位。",
   },
   {
-    source: "hot_money_d",
+    source: "hot_money_a",
     target: "retail_c",
     weight: 0.35,
     reason_ref: "forum_post_202",
-    public_reason: "游资丁公开发声，散户三关注上行预期。",
+    public_reason: "游资甲公开发声，散户三关注上行预期。",
   },
   {
-    source: "hot_money_d",
+    source: "hot_money_b",
     target: "retail_b",
     weight: 0.32,
     reason_ref: "forum_post_202",
     public_reason: "公开消息推动散户二跟风。",
   },
   {
-    source: "hot_money_e",
+    source: "hot_money_a",
     target: "retail_a",
     weight: 0.29,
     reason_ref: "forum_post_202",
@@ -342,7 +341,7 @@ const auditEdges: AuditGraphEdge[] = [
   },
   {
     source: "market",
-    target: "hot_money_c",
+    target: "hot_money_b",
     weight: 0.31,
     reason_ref: "tape_alert_002",
     public_reason: "流动性收缩告警，游资丙转向防守。",
@@ -401,26 +400,26 @@ const auditEdges: AuditGraphEdge[] = [
   },
   {
     source: "mutual_fund_b",
-    target: "mutual_fund_c",
+    target: "quant_algo_a",
     weight: 0.28,
     reason_ref: "official_002",
-    public_reason: "公募乙降低敞口，公募丙跟进。",
+    public_reason: "公募乙降低敞口，量化甲同步收缩敞口。",
   },
-  // Suspended fund -> still publishes prior view
+  // Suspended quant -> still publishes prior view
   {
-    source: "mutual_fund_d",
+    source: "quant_algo_b",
     target: "mutual_fund_a",
     weight: 0.18,
     reason_ref: "official_001",
-    public_reason: "公募丁停牌期间留存的研究观点仍被同业引用。",
+    public_reason: "量化乙暂停期间留存的微观结构信号仍被同业引用。",
   },
   // National team -> hot money (signaling)
   {
     source: "national_team_a",
-    target: "hot_money_e",
+    target: "retail_o",
     weight: 0.36,
     reason_ref: "official_002",
-    public_reason: "国家队公开维稳信号让游资戊降低空仓预期。",
+    public_reason: "国家队公开维稳信号让散户十五降低空仓预期。",
   },
   // Cascade towards liquidation
   {
@@ -633,8 +632,8 @@ export const demoSeed: DemoSeed = {
     ],
     lifecycle: [
       {
-        agent_id: "mutual_fund_d",
-        agent_type: "mutual_fund",
+        agent_id: "quant_algo_b",
+        agent_type: "quant_algo",
         lifecycle_state: "suspended",
         reason_code: "ops_manual_suspend",
         public_label: "已挂起",
@@ -737,7 +736,7 @@ export const demoSeed: DemoSeed = {
             step_id: "step_012",
             step_type: "belief_shift",
             tick_id: tickAlert,
-            actor_id: "hot_money_c",
+            actor_id: "hot_money_b",
             event_ref: "audit_graph_002",
             label: "游资降低风险偏好",
             public_text: "短线阵营在卖压扩大后转向防守，对下行风险定价上升。",
@@ -746,7 +745,7 @@ export const demoSeed: DemoSeed = {
             step_id: "step_013",
             step_type: "order_flow",
             tick_id: tickAlert,
-            actor_id: "hot_money_c",
+            actor_id: "hot_money_b",
             event_ref: "mkt_003",
             label: "撤单与减仓",
             public_text: "高敞口账户主动撤单减仓，盘口卖盘进一步加重。",
@@ -898,7 +897,7 @@ export const demoSeed: DemoSeed = {
       },
       {
         post_id: "forum_post_202",
-        author_agent_id: "hot_money_d",
+        author_agent_id: "hot_money_b",
         author_type: "hot_money",
         text: "公开股吧内容：盘口下方承接转薄，注意短线下行风险。",
         stance: "bearish",

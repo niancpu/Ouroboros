@@ -22,8 +22,8 @@ export function DossierPath({ chains }: DossierPathProps) {
             y={22 + (index % 2) * 24}
             width="16"
             height="10"
-            fill="#fff"
-            stroke="#000"
+            fill="var(--color-surface, #ffffff)"
+            stroke="var(--color-border-strong, #d1d5db)"
           />
           <text x={7 + index * 22} y={29 + (index % 2) * 24} fontSize="3">
             {labelFrom(causalStepTypeLabels, step.step_type)}
@@ -36,7 +36,7 @@ export function DossierPath({ chains }: DossierPathProps) {
                 66 - (index % 2) * 24
               }, ${50 + index * 22} ${27 + ((index + 1) % 2) * 24}`}
               fill="none"
-              stroke={index === 1 ? "#002fa7" : "#000"}
+              stroke={index === 1 ? "var(--color-accent, #1e3a5f)" : "var(--color-text-secondary, #6b7280)"}
               strokeWidth="0.9"
             />
           )}

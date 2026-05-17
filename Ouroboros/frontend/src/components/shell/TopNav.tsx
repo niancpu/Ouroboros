@@ -11,6 +11,7 @@ export function TopNav({ activeModule, onSelect, sessionStatus }: TopNavProps) {
   const statusText = sessionStatus
     ? labelFrom(sessionStatusLabels, sessionStatus) || sessionStatus
     : "未创建";
+  const moduleIndex = new Map(MODULE_KEYS.map((module, index) => [module, index + 1]));
 
   return (
     <header className="top-nav">
@@ -25,6 +26,7 @@ export function TopNav({ activeModule, onSelect, sessionStatus }: TopNavProps) {
             type="button"
             onClick={() => onSelect(module)}
           >
+            <span>{String(moduleIndex.get(module) ?? 0).padStart(2, "0")}</span>
             {labelFrom(moduleLabels, module) || module}
           </button>
         ))}
