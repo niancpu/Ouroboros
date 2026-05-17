@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from Ouroboros.core.routing import (
+    BusConfigurationError,
     Channel,
     ChannelRouter,
     RedisBus,
@@ -131,6 +133,20 @@ def official_news(
 
 
 class RoutingTests(unittest.TestCase):
+    def test_default_bus_mode_uses_in_memory_compatibility_bus(self) -> None:
+        router = ChannelRouter(session_id="sim_001")
+
+        self.assertIsInstance(router.bus, RedisBus)
+
+    def test_explicit_redis_bus_mode_fails_fast(self) -> None:
+        with self.assertRaisesRegex(BusConfigurationError, "no real Redis bus adapter"):
+            ChannelRouter(session_id="sim_001", bus_mode="redis")
+
+    def test_channel_router_does_not_hide_redis_mode_with_injected_bus(self) -> None:
+        with patch.dict("os.environ", {"OUROBOROS_BUS_MODE": "redis"}, clear=True):
+            with self.assertRaisesRegex(BusConfigurationError, "will not fall back"):
+                ChannelRouter(session_id="sim_001", bus=RedisBus())
+
     def test_channel_names_are_session_scoped(self) -> None:
         shared_bus = RedisBus()
         session_a = ChannelRouter(session_id="sim_a", bus=shared_bus)

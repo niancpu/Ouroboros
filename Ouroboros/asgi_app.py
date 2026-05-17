@@ -20,6 +20,13 @@ from Ouroboros.core.agents import AgentRuntime
 from Ouroboros.core.chronos import InMemoryChronosRepository
 from Ouroboros.core.llm import LLMConfig, LLMGateway
 from Ouroboros.core.orchestrator import SessionAgentSpec, SessionRunner
+from Ouroboros.core.routing import (
+    BUS_MODE_IN_MEMORY,
+    BUS_MODE_REDIS,
+    BUS_MODE_ENV,
+    BusConfigurationError,
+    bus_mode_from_env,
+)
 from Ouroboros.core.schemas import SCHEMA_VERSION
 from Ouroboros.core.schemas.common import SchemaValidationError
 from Ouroboros.core.web_api.control_rest import ControlRestApi, RestHttpRequest
@@ -190,6 +197,7 @@ def _official_news_scope(agent_type: str) -> list[str]:
 
 def _create_runner() -> SessionRunner:
     agent_mode = _agent_mode_from_env()
+    _bus_mode_from_env()
     return SessionRunner(
         chronos_repository=InMemoryChronosRepository.from_dicts(
             initial_market_seeds={
@@ -219,6 +227,16 @@ def _agent_mode_from_env(environ: Mapping[str, str] | None = None) -> str:
         allowed = ", ".join(sorted(_AGENT_MODES))
         raise SchemaValidationError(f"{_AGENT_MODE_ENV} must be one of: {allowed}")
     return mode
+
+
+def _bus_mode_from_env(environ: Mapping[str, str] | None = None) -> str:
+    mode = bus_mode_from_env(environ)
+    if mode == BUS_MODE_REDIS:
+        raise BusConfigurationError(
+            f"{BUS_MODE_ENV}=redis requires a real Redis bus adapter, but ASGI "
+            "currently wires only the in-process compatibility bus."
+        )
+    return BUS_MODE_IN_MEMORY
 
 
 def _agent_runtime_factory(agent_mode: str) -> Callable[[], AgentRuntime]:

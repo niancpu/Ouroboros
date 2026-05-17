@@ -34,7 +34,15 @@ from Ouroboros.core.schemas.market import (
     TapeAlertEvent,
 )
 
-from .bus import BufferedEvent, RedisBus
+from .bus import (
+    BUS_MODE_REDIS,
+    BusConfigurationError,
+    BufferedEvent,
+    RedisBus,
+    bus_mode_from_env,
+    create_layer2_bus,
+    normalize_bus_mode,
+)
 
 
 class Channel(StrEnum):
@@ -215,18 +223,29 @@ CHANNEL_POLICIES: dict[Channel, ChannelPolicy] = {
 
 
 class ChannelRouter:
-    """Policy-enforcing facade over the in-process bus."""
+    """Policy-enforcing facade over the configured Layer 2 bus."""
 
     def __init__(
         self,
         *,
         session_id: str,
         bus: RedisBus | None = None,
+        bus_mode: str | None = None,
         default_ttl_seconds: float = 60.0,
     ) -> None:
         require_non_empty_str(session_id, "session_id")
         self.session_id = session_id
-        self.bus = bus or RedisBus(default_ttl_seconds=default_ttl_seconds)
+        normalized_bus_mode = bus_mode_from_env() if bus_mode is None else normalize_bus_mode(bus_mode)
+        if normalized_bus_mode == BUS_MODE_REDIS:
+            raise BusConfigurationError(
+                "ChannelRouter cannot run in redis mode because no real Redis "
+                "bus adapter is implemented; it will not fall back to the "
+                "in-process compatibility bus."
+            )
+        self.bus = bus or create_layer2_bus(
+            mode=normalized_bus_mode,
+            default_ttl_seconds=default_ttl_seconds,
+        )
         self._agent_subscriptions: dict[str, frozenset[str]] = {}
         self._agent_permission_profiles: dict[str, AgentPermissionProfile] = {}
 

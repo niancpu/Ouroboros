@@ -6,11 +6,20 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 import copy
+import os
 import itertools
 import time
 
 
 EventHandler = Callable[[dict[str, Any]], None]
+BUS_MODE_ENV = "OUROBOROS_BUS_MODE"
+BUS_MODE_IN_MEMORY = "in_memory"
+BUS_MODE_REDIS = "redis"
+BUS_MODES = frozenset({BUS_MODE_IN_MEMORY, BUS_MODE_REDIS})
+
+
+class BusConfigurationError(RuntimeError):
+    """Raised when Layer 2 bus configuration cannot be honored."""
 
 
 @dataclass(frozen=True)
@@ -28,11 +37,12 @@ class BufferedEvent:
 
 
 class RedisBus:
-    """In-process Redis-like pub/sub and replay buffer.
+    """In-process Redis compatibility pub/sub and replay buffer.
 
-    The class intentionally has no Redis dependency. It models the small subset
-    Layer 2 needs now: deterministic publish order, subscription callbacks, and
-    TTL-bound replay buffers.
+    This is not a Redis client and must not be treated as a production Redis
+    adapter. It intentionally has no Redis dependency and only models the small
+    subset Layer 2 needs for local/test execution: deterministic publish order,
+    subscription callbacks, and TTL-bound replay buffers.
     """
 
     def __init__(
@@ -124,3 +134,41 @@ class RedisBus:
     def clear(self) -> None:
         self._buffers.clear()
         self._subscribers.clear()
+
+
+def normalize_bus_mode(mode: str | None) -> str:
+    normalized = (mode or BUS_MODE_IN_MEMORY).strip().lower() or BUS_MODE_IN_MEMORY
+    if normalized not in BUS_MODES:
+        allowed = ", ".join(sorted(BUS_MODES))
+        raise BusConfigurationError(f"{BUS_MODE_ENV} must be one of: {allowed}")
+    return normalized
+
+
+def bus_mode_from_env(environ: Mapping[str, str] | None = None) -> str:
+    source = environ if environ is not None else os.environ
+    return normalize_bus_mode(source.get(BUS_MODE_ENV))
+
+
+def create_layer2_bus(
+    *,
+    mode: str | None = None,
+    default_ttl_seconds: float = 60.0,
+    clock: Callable[[], float] | None = None,
+) -> RedisBus:
+    """Create the configured Layer 2 bus implementation.
+
+    ``in_memory`` returns the local compatibility bus. ``redis`` fails fast
+    until a real Redis adapter exists, so production config cannot silently run
+    on process-local state.
+    """
+
+    bus_mode = bus_mode_from_env() if mode is None else normalize_bus_mode(mode)
+    if bus_mode == BUS_MODE_IN_MEMORY:
+        return RedisBus(default_ttl_seconds=default_ttl_seconds, clock=clock)
+    if bus_mode == BUS_MODE_REDIS:
+        raise BusConfigurationError(
+            f"{BUS_MODE_ENV}=redis requires a real Redis bus adapter, but this "
+            "repository currently provides only the in-process compatibility "
+            f"bus; set {BUS_MODE_ENV}=in_memory for local tests or demos."
+        )
+    raise BusConfigurationError(f"unsupported bus mode: {bus_mode}")
