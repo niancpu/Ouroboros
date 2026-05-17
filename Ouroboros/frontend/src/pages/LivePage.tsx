@@ -26,7 +26,7 @@ import {
 import {
   deriveAgentLifecycleMap,
   deriveAuditGraph,
-  derivePriceHistory,
+  deriveOHLCV,
   deriveTickList,
   pickEventsByType,
   pickLatestMarketPrice,
@@ -121,7 +121,7 @@ export function LivePage() {
     () => events.events.filter((e) => e.type === "market.price"),
     [events.events],
   );
-  const priceHistory = useMemo(() => derivePriceHistory(marketEvents), [marketEvents]);
+  const ohlcv = useMemo(() => deriveOHLCV(marketEvents), [marketEvents]);
   const latestMarket = useMemo(() => {
     const event = pickLatestMarketPrice(marketEvents);
     if (event) return event.payload as MarketSnapshot;
@@ -311,7 +311,7 @@ export function LivePage() {
               ticks={tickList}
               onChange={(index) => setScrubIndex(index)}
             />
-            <MarketCurves market={latestMarket} priceHistory={priceHistory} />
+            <MarketCurves bars={ohlcv} lastPrice={latestMarket.last_price} />
           </section>
 
           <aside className="order-book inspector-book">

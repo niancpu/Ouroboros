@@ -116,3 +116,42 @@ export function pickLatestMarketPrice(
   }
   return null;
 }
+
+export interface OHLCVBar {
+  tick_id: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  is_up: boolean; // close >= open
+}
+
+export function deriveOHLCV(
+  events: ReadonlyArray<ServerEventEnvelope>,
+): OHLCVBar[] {
+  // Group market.price events by tick_id
+  const byTick = new Map<string, { prices: number[]; volumes: number[] }>();
+  for (const evt of events) {
+    if (evt.type !== "market.price") continue;
+    const p = evt.payload as { last_price?: unknown; volume?: unknown };
+    if (typeof p.last_price !== "number") continue;
+    const bucket = byTick.get(evt.tick_id) ?? { prices: [], volumes: [] };
+    bucket.prices.push(p.last_price);
+    if (typeof p.volume === "number") bucket.volumes.push(p.volume);
+    byTick.set(evt.tick_id, bucket);
+  }
+  const bars: OHLCVBar[] = [];
+  for (const [tick_id, { prices, volumes }] of byTick) {
+    if (prices.length === 0) continue;
+    const open = prices[0];
+    const close = prices[prices.length - 1];
+    const high = Math.max(...prices);
+    const low = Math.min(...prices);
+    const volume = volumes.length > 0 ? volumes[volumes.length - 1] : 0;
+    bars.push({ tick_id, open, high, low, close, volume, is_up: close >= open });
+  }
+  // Sort by tick_id (string sort works for tick IDs like "T001", "T002")
+  bars.sort((a, b) => a.tick_id.localeCompare(b.tick_id));
+  return bars.slice(-24); // keep last 24 candles max
+}
