@@ -252,6 +252,7 @@ def build_causal_chain(
     title: str,
     summary: str,
     steps: Iterable[Mapping[str, Any]],
+    last_event_ref: str | None = None,
     metrics: Mapping[str, Any] | None = None,
     trades: TradeBatch | Iterable[TradeEvent | Mapping[str, Any]] | None = None,
 ) -> CausalChainEvent:
@@ -264,6 +265,11 @@ def build_causal_chain(
         ref = require_non_empty_str(step.get("event_ref"), "event_ref")
         _assert_allowed_event_ref(ref)
         step_payloads.append(step)
+    resolved_last_event_ref = last_event_ref
+    if resolved_last_event_ref is None and step_payloads:
+        resolved_last_event_ref = str(step_payloads[-1]["event_ref"])
+    if resolved_last_event_ref is not None:
+        _assert_allowed_event_ref(require_non_empty_str(resolved_last_event_ref, "last_event_ref"))
     metric_data = dict(require_mapping(metrics or {}, "metrics"))
     ensure_no_forbidden_keys(metric_data, PRIVATE_FIELD_NAMES, "metrics")
     trade_count = _trade_count(trades)
@@ -279,6 +285,7 @@ def build_causal_chain(
         "chain_id": require_non_empty_str(chain_id, "chain_id"),
         "title": require_non_empty_str(title, "title"),
         "summary": require_non_empty_str(summary, "summary"),
+        "last_event_ref": require_non_empty_str(resolved_last_event_ref, "last_event_ref"),
         "steps": step_payloads,
         "metrics": metric_data,
     }

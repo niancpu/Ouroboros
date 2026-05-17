@@ -794,6 +794,7 @@ class CausalChainEvent:
     chain_id: str
     title: str
     summary: str
+    last_event_ref: str
     steps: list[CausalStep]
     metrics: dict[str, Any] = field(default_factory=dict)
 
@@ -805,6 +806,10 @@ class CausalChainEvent:
         visibility = coerce_enum(InternalVisibility, data.get("visibility"), "visibility")
         if visibility != InternalVisibility.FRONTEND_ONLY:
             raise ValueError("CausalChainEvent visibility must be frontend_only")
+        steps = [CausalStep.from_dict(item) for item in data.get("steps", [])]
+        last_event_ref = data.get("last_event_ref")
+        if last_event_ref is None and steps:
+            last_event_ref = steps[-1].event_ref
         return cls(
             schema_version=SCHEMA_VERSION,
             event_id=require_non_empty_str(data.get("event_id"), "event_id"),
@@ -815,7 +820,8 @@ class CausalChainEvent:
             chain_id=require_non_empty_str(data.get("chain_id"), "chain_id"),
             title=require_non_empty_str(data.get("title"), "title"),
             summary=require_non_empty_str(data.get("summary"), "summary"),
-            steps=[CausalStep.from_dict(item) for item in data.get("steps", [])],
+            last_event_ref=require_non_empty_str(last_event_ref, "last_event_ref"),
+            steps=steps,
             metrics=dict(require_mapping(data.get("metrics", {}), "metrics")),
         )
 

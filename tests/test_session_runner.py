@@ -59,6 +59,11 @@ class SessionRunnerTests(unittest.TestCase):
         )
         self.assertEqual(snapshot_after["current_tick_id"], NEXT_TICK)
         self.assertEqual(snapshot_after["market"]["last_price"], 10.0)
+        self.assertTrue(snapshot_after["causal_chains"])
+        self.assertEqual(
+            snapshot_after["causal_chains"][-1]["chain_id"],
+            "chain_2024_01_02T14_02_00_08_00",
+        )
         agents = {agent["agent_id"]: agent for agent in snapshot_after["agents"]}
         self.assertEqual(agents["buyer"]["positions"], {SYMBOL: 100})
         self.assertEqual(agents["seller"]["positions"], {SYMBOL: 900})
@@ -75,6 +80,7 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertIn("market.price", event_types)
         self.assertIn("agent.account_snapshot", event_types)
         self.assertIn("audit.graph", event_types)
+        self.assertIn("audit.causal_chain", event_types)
         self.assertNotIn("Order_Input", event_types)
         self.assertNotIn("UI_Audit", event_types)
         self.assertIn("news_runner_visible", step["tick_result"]["published_event_ids"])
@@ -86,11 +92,45 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertEqual({node["agent_id"] for node in audit_nodes}, {"buyer", "seller"})
         self.assertEqual(audit_edges, [])
 
+        chain_events = [event for event in events if event["type"] == "audit.causal_chain"]
+        self.assertTrue(chain_events)
+        chain_payload = chain_events[-1]["payload"]
+        self.assertEqual(chain_payload["last_event_ref"], chain_payload["steps"][-1]["event_ref"])
+        self.assertEqual(chain_payload["metrics"]["trade_count"], 1)
+        self.assertIn(chain_payload["chain_id"], step["tick_result"]["published_event_ids"])
+
         rendered = json.dumps(events, ensure_ascii=False, sort_keys=True)
         self.assertNotIn("private buyer alpha", rendered)
         self.assertNotIn("private seller alpha", rendered)
         self.assertNotIn("news_runner_future", rendered)
         self.assertNotIn("thought", rendered)
+        self.assertNotIn("memory_update", rendered)
+
+    def test_final_tick_publishes_end_of_day(self) -> None:
+        runner = session_runner()
+        runner.create_session(create_command(end_tick_id=TICK))
+
+        step = runner.step_session(
+            SESSION_ID,
+            ticks=1,
+            command_id="cmd_step_final_tick",
+            trace_id=TRACE,
+        )
+
+        events = runner.get_frontend_events(
+            SESSION_ID,
+            from_seq=0,
+            limit=500,
+            request_id="req_events_eod",
+            trace_id=TRACE,
+        )["events"]
+        eod_events = [event for event in events if event["type"] == "market.end_of_day"]
+        self.assertTrue(eod_events)
+        eod_payload = eod_events[-1]["payload"]
+        self.assertEqual(eod_payload["symbol"], SYMBOL)
+        self.assertEqual(eod_payload["close_price"], 10.0)
+        self.assertIn(eod_payload["event_id"], step["tick_result"]["published_event_ids"])
+        self.assertEqual(step["status"], "completed")
 
     def test_control_rest_api_can_drive_session_runner(self) -> None:
         runner = session_runner()
@@ -277,7 +317,7 @@ def liquidation_session_runner(
     )
 
 
-def create_command() -> CreateSessionCommand:
+def create_command(*, end_tick_id: str = NEXT_TICK) -> CreateSessionCommand:
     return CreateSessionCommand.from_dict(
         {
             "schema_version": SCHEMA_VERSION,
@@ -286,7 +326,7 @@ def create_command() -> CreateSessionCommand:
             "symbol": SYMBOL,
             "agent_profile_set": "runner_agents",
             "start_tick_id": TICK,
-            "end_tick_id": NEXT_TICK,
+            "end_tick_id": end_tick_id,
             "tick_interval": "5m",
         }
     )

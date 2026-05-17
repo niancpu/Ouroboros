@@ -26,6 +26,7 @@ from Ouroboros.core.schemas import (
     AgentPermissionProfile,
     AgentResults,
     AuditGraphEvent,
+    CausalChainEvent,
     CreateSessionCommand,
     CreateSessionResult,
     ErrorCode,
@@ -153,6 +154,7 @@ class _SessionRuntime:
     last_market_event: MarketPriceEvent | None = None
     previous_market_event: MarketPriceEvent | None = None
     last_audit_graph: AuditGraphEvent | None = None
+    recent_causal_chains: list[CausalChainEvent] = field(default_factory=list)
     last_trade_batch: TradeBatch | None = None
     last_order_submission: OrderSubmissionResult | None = None
     last_settlement: SettlementResult | None = None
@@ -453,7 +455,10 @@ class SessionRunner:
                     if runtime.last_audit_graph is not None
                     else {"nodes": [], "edges": []}
                 ),
-                "causal_chains": [],
+                "causal_chains": [
+                    _causal_chain_summary(chain)
+                    for chain in runtime.recent_causal_chains
+                ],
             }
         )
 
@@ -1216,6 +1221,77 @@ class SessionRunner:
             visibility=map_internal_visibility_to_web(audit_graph.visibility),
             payload=audit_graph.to_dict(),
         )
+        self._publish_causal_chain(
+            runtime,
+            command,
+            artifacts,
+            audit_graph=audit_graph,
+        )
+        if _is_final_tick(command.tick_id, runtime.command.end_tick_id):
+            self._publish_end_of_day(runtime, command, artifacts)
+
+    def _publish_causal_chain(
+        self,
+        runtime: _SessionRuntime,
+        command: RunTickCommand,
+        artifacts: _TickArtifacts,
+        *,
+        audit_graph: AuditGraphEvent,
+    ) -> None:
+        steps = _causal_chain_steps(command, artifacts, audit_graph)
+        if not steps:
+            return
+        chain_id = f"chain_{_stable_id(command.tick_id)}"
+        chain = runtime.ui_audit_officer.publish_causal_chain(
+            event_id=chain_id,
+            tick_id=command.tick_id,
+            trace_id=command.trace_id,
+            chain_id=chain_id,
+            title="Tick public audit chain",
+            summary="Public market, forum, and audit references were linked into a frontend-safe chain.",
+            steps=steps,
+            metrics={
+                "affected_agent_count": len(audit_graph.nodes),
+                "audit_edge_count": len(audit_graph.edges),
+            },
+            trades=artifacts.trade_batch,
+        )
+        runtime.recent_causal_chains.append(chain)
+        while len(runtime.recent_causal_chains) > 20:
+            runtime.recent_causal_chains.pop(0)
+        artifacts.published_event_ids.append(chain.event_id)
+        self._publish_frontend_event(
+            runtime,
+            event_type="audit.causal_chain",
+            tick_id=command.tick_id,
+            trace_id=command.trace_id,
+            visibility=map_internal_visibility_to_web(chain.visibility),
+            payload=chain.to_dict(),
+        )
+
+    def _publish_end_of_day(
+        self,
+        runtime: _SessionRuntime,
+        command: RunTickCommand,
+        artifacts: _TickArtifacts,
+    ) -> None:
+        market_event = artifacts.market_event or runtime.last_market_event
+        if market_event is None:
+            return
+        event = runtime.exchange_broadcaster.publish_end_of_day(
+            market_event,
+            market_phase="closed",
+            event_id=f"eod_{_stable_id(runtime.command.symbol)}_{_stable_id(command.tick_id)}",
+        )
+        artifacts.published_event_ids.append(event.event_id)
+        self._publish_frontend_event(
+            runtime,
+            event_type="market.end_of_day",
+            tick_id=event.tick_id,
+            trace_id=event.trace_id,
+            visibility=map_internal_visibility_to_web(event.visibility),
+            payload=event.to_dict(),
+        )
 
     def _enrich_audit_events_with_stigmergy_sources(
         self,
@@ -1554,6 +1630,10 @@ def _tick_after_end(tick_id: str, end_tick_id: str) -> bool:
     return _parse_datetime(tick_id, "tick_id") > _parse_datetime(end_tick_id, "end_tick_id")
 
 
+def _is_final_tick(tick_id: str, end_tick_id: str) -> bool:
+    return _parse_datetime(tick_id, "tick_id") >= _parse_datetime(end_tick_id, "end_tick_id")
+
+
 def _parse_datetime(value: str, field_name: str) -> datetime:
     value = require_non_empty_str(value, field_name)
     try:
@@ -1585,6 +1665,117 @@ def _parse_interval(value: str) -> timedelta:
 
 def _frontend_safe_refs(refs: Iterable[str]) -> list[str]:
     return [ref for ref in refs if ref.startswith(FRONTEND_SAFE_EVENT_REF_PREFIXES)]
+
+
+def _causal_chain_summary(chain: CausalChainEvent) -> dict[str, Any]:
+    return {
+        "chain_id": chain.chain_id,
+        "title": chain.title,
+        "summary": chain.summary,
+        "last_event_ref": chain.last_event_ref,
+    }
+
+
+def _causal_chain_steps(
+    command: RunTickCommand,
+    artifacts: _TickArtifacts,
+    audit_graph: AuditGraphEvent,
+) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    for forum in artifacts.forum_events:
+        steps.append(
+            _causal_step(
+                steps,
+                step_type="public_message",
+                tick_id=command.tick_id,
+                actor_id="public_forum",
+                event_ref=forum.event_id,
+                label="Forum",
+                public_text="A public forum post entered the visible information set.",
+            )
+        )
+    if artifacts.market_event is not None:
+        steps.append(
+            _causal_step(
+                steps,
+                step_type="price_move",
+                tick_id=command.tick_id,
+                actor_id="anonymous_market",
+                event_ref=artifacts.market_event.event_id,
+                label="Market",
+                public_text="A public market snapshot was published for this Tick.",
+            )
+        )
+    for alert in artifacts.tape_alerts:
+        steps.append(
+            _causal_step(
+                steps,
+                step_type="tape_alert",
+                tick_id=command.tick_id,
+                actor_id="exchange_broadcaster",
+                event_ref=alert.event_id,
+                label="Tape",
+                public_text="An anonymous tape alert was linked to the audit trail.",
+            )
+        )
+    if audit_graph.nodes or audit_graph.edges:
+        steps.append(
+            _causal_step(
+                steps,
+                step_type="belief_shift",
+                tick_id=command.tick_id,
+                actor_id="ui_audit_officer",
+                event_ref=audit_graph.event_id,
+                label="Audit",
+                public_text="Frontend audit graph summarized public evidence and agent-level effects.",
+            )
+        )
+    elif artifacts.ui_audit_events:
+        steps.append(
+            _causal_step(
+                steps,
+                step_type="belief_shift",
+                tick_id=command.tick_id,
+                actor_id="ui_audit_officer",
+                event_ref=audit_graph.event_id,
+                label="Audit",
+                public_text="Frontend audit material existed, but no public evidence references were exposed.",
+            )
+        )
+    if artifacts.trade_batch is not None and artifacts.trade_batch.trades:
+        steps.append(
+            _causal_step(
+                steps,
+                step_type="order_flow",
+                tick_id=command.tick_id,
+                actor_id="anonymous_order_flow",
+                event_ref=f"trade_{_stable_id(artifacts.trade_batch.batch_id)}",
+                label="Trades",
+                public_text="Anonymous trade count was attached without order or agent identifiers.",
+            )
+        )
+    return steps
+
+
+def _causal_step(
+    existing_steps: list[dict[str, Any]],
+    *,
+    step_type: str,
+    tick_id: str,
+    actor_id: str,
+    event_ref: str,
+    label: str,
+    public_text: str,
+) -> dict[str, Any]:
+    return {
+        "step_id": f"step_{len(existing_steps) + 1:03d}",
+        "step_type": step_type,
+        "tick_id": tick_id,
+        "actor_id": actor_id,
+        "event_ref": event_ref,
+        "label": label,
+        "public_text": public_text,
+    }
 
 
 def _refs_market_medium(refs: Iterable[str], market_refs: set[str]) -> bool:

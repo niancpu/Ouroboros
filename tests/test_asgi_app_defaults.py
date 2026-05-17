@@ -4,8 +4,9 @@ import unittest
 from collections import Counter
 from unittest.mock import patch
 
-from Ouroboros.asgi_app import _create_runner, _default_agent_specs
+from Ouroboros.asgi_app import _bus_mode_from_env, _create_runner, _default_agent_specs
 from Ouroboros.core.llm import LLMConfig, LLMConfigurationError
+from Ouroboros.core.routing import BusConfigurationError
 from Ouroboros.core.schemas import OrderActionType, TickContext
 
 
@@ -42,6 +43,15 @@ class AsgiAppDefaultAgentTests(unittest.TestCase):
 
         self.assertEqual(specs[0].agent_id, "mutual_fund_a")
         self.assertEqual(runtime._default_actions, {})
+
+    def test_asgi_default_bus_mode_is_in_memory(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_bus_mode_from_env(), "in_memory")
+
+    def test_asgi_redis_bus_mode_fails_fast(self) -> None:
+        with patch.dict("os.environ", {"OUROBOROS_BUS_MODE": "redis"}, clear=True):
+            with self.assertRaisesRegex(BusConfigurationError, "requires a real Redis bus adapter"):
+                _create_runner()
 
     def test_default_llm_mode_rejects_missing_provider_config(self) -> None:
         with patch.dict("os.environ", {}, clear=True), patch(
