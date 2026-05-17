@@ -19,7 +19,7 @@ from Ouroboros.core.chronos import InMemoryChronosRepository
 from Ouroboros.core.orchestrator import SessionAgentSpec, SessionRunner
 from Ouroboros.core.schemas import SCHEMA_VERSION
 from Ouroboros.core.web_api.control_rest import ControlRestApi, RestHttpRequest
-from Ouroboros.core.web_api.realtime_ws import FrontendRealtimeGateway
+from Ouroboros.core.web_api.realtime_ws import FrontendRealtimeGateway, FrontendWsMessage
 
 
 app = FastAPI(title="Ouroboros Web API")
@@ -46,7 +46,7 @@ async def control_rest(path: str, request: Request) -> JSONResponse:
             query=dict(request.query_params.multi_items()),
         ),
     )
-    _mirror_replay_events(response.body)
+    await _mirror_replay_events(response.body)
     return JSONResponse(
         status_code=response.status_code,
         content=response.body,
@@ -62,7 +62,9 @@ async def session_ws(
     from_seq: int | None = None,
 ) -> None:
     await websocket.accept()
-    _realtime_gateway.connect(session_id, client_id, from_seq=from_seq)
+    connect_messages = _realtime_gateway.connect(session_id, client_id, from_seq=from_seq)
+    await _register_ws(session_id, client_id, websocket)
+    await _send_ws_messages(websocket, connect_messages)
     try:
         while True:
             message = await websocket.receive_json()
@@ -71,9 +73,11 @@ async def session_ws(
                 client_id,
                 message,
             )
-            for response in responses:
-                await websocket.send_json(response.body)
+            await _send_ws_messages(websocket, responses)
     except WebSocketDisconnect:
+        pass
+    finally:
+        await _unregister_ws(session_id, client_id, websocket)
         _realtime_gateway.disconnect(session_id, client_id)
 
 
@@ -150,6 +154,8 @@ _runner = _create_runner()
 _control_api = ControlRestApi(control_plane=_runner)
 _realtime_gateway = FrontendRealtimeGateway()
 _mirrored_seq_by_session: dict[str, int] = {}
+_ws_connections: dict[str, dict[str, WebSocket]] = {}
+_ws_connections_lock = asyncio.Lock()
 
 
 async def _json_body(request: Request) -> Mapping[str, Any] | None:
@@ -164,7 +170,7 @@ async def _json_body(request: Request) -> Mapping[str, Any] | None:
     return {"_invalid_body": data}
 
 
-def _mirror_replay_events(body: Mapping[str, Any]) -> None:
+async def _mirror_replay_events(body: Mapping[str, Any]) -> None:
     data = body.get("data")
     if not isinstance(data, Mapping):
         return
@@ -183,6 +189,47 @@ def _mirror_replay_events(body: Mapping[str, Any]) -> None:
     except Exception:
         return
     for event in events:
-        _realtime_gateway.publish_event(session_id, event)
+        outbound = _realtime_gateway.publish_event(session_id, event)
+        await _fanout_ws_messages(session_id, outbound)
     if events:
         _mirrored_seq_by_session[session_id] = int(events[-1]["seq"])
+
+
+async def _register_ws(session_id: str, client_id: str, websocket: WebSocket) -> None:
+    async with _ws_connections_lock:
+        _ws_connections.setdefault(session_id, {})[client_id] = websocket
+
+
+async def _unregister_ws(session_id: str, client_id: str, websocket: WebSocket) -> None:
+    async with _ws_connections_lock:
+        clients = _ws_connections.get(session_id)
+        if clients is None or clients.get(client_id) is not websocket:
+            return
+        clients.pop(client_id, None)
+        if not clients:
+            _ws_connections.pop(session_id, None)
+
+
+async def _fanout_ws_messages(
+    session_id: str,
+    outbound: Mapping[str, list[FrontendWsMessage]],
+) -> None:
+    async with _ws_connections_lock:
+        sockets = {
+            client_id: websocket
+            for client_id, websocket in _ws_connections.get(session_id, {}).items()
+            if client_id in outbound
+        }
+    for client_id, websocket in sockets.items():
+        try:
+            await _send_ws_messages(websocket, outbound[client_id])
+        except RuntimeError:
+            await _unregister_ws(session_id, client_id, websocket)
+
+
+async def _send_ws_messages(
+    websocket: WebSocket,
+    messages: list[FrontendWsMessage],
+) -> None:
+    for message in messages:
+        await websocket.send_json(message.body)

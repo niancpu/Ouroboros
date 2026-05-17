@@ -67,6 +67,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef<number>(0);
   const intentionalStopRef = useRef<boolean>(false);
+  const connectionIdRef = useRef<number>(0);
   const lastStartArgsRef = useRef<{
     sessionId: string;
     fromSeq: number;
@@ -92,6 +93,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const stop = useCallback(
     (reason?: string) => {
       intentionalStopRef.current = true;
+      connectionIdRef.current += 1;
+      reconnectAttemptsRef.current = 0;
       clearReconnect();
       clearPing();
       wsClientRef.current?.close(1000, reason);
@@ -101,18 +104,29 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     [clearPing, clearReconnect],
   );
 
-  const start = useCallback(
-    (sessionId: string, fromSeq: number, handlers: RealtimeStartHandlers) => {
+  const connect = useCallback(
+    (
+      sessionId: string,
+      fromSeq: number,
+      handlers: RealtimeStartHandlers,
+      options: { resetAttempts: boolean },
+    ) => {
       intentionalStopRef.current = false;
-      reconnectAttemptsRef.current = 0;
       lastStartArgsRef.current = { sessionId, fromSeq, handlers };
+      const connectionId = connectionIdRef.current + 1;
+      connectionIdRef.current = connectionId;
 
       // Update reconnect ref so onClose closure always calls latest start
-      reconnectRef.current = () => start(sessionId, fromSeq, handlers);
+      reconnectRef.current = () =>
+        connect(sessionId, fromSeq, handlers, { resetAttempts: false });
 
-      stop();
-      // stop() sets intentionalStopRef = true, reset after
-      intentionalStopRef.current = false;
+      clearReconnect();
+      clearPing();
+      wsClientRef.current?.close(1000, "replace");
+      wsClientRef.current = null;
+      if (options.resetAttempts) {
+        reconnectAttemptsRef.current = 0;
+      }
 
       dispatch({ type: "connecting" });
       const client = new FrontendRealtimeClient({
@@ -124,6 +138,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
       client.connect({
         onOpen: () => {
+          if (connectionId !== connectionIdRef.current) return;
           reconnectAttemptsRef.current = 0;
           dispatch({ type: "open" });
           try {
@@ -140,9 +155,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           }, PING_INTERVAL_MS);
         },
         onEvent: (event: ServerEventEnvelope) => {
+          if (connectionId !== connectionIdRef.current) return;
           handlers.onEvent(event);
         },
         onError: (error: ApiError) => {
+          if (connectionId !== connectionIdRef.current) return;
           if (error.code === "SNAPSHOT_REQUIRED") {
             dispatch({ type: "recovering" });
             handlers.onSnapshotRequired();
@@ -152,14 +169,15 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           dispatch({ type: "error", error });
         },
         onClose: (closeEvent) => {
+          if (connectionId !== connectionIdRef.current) return;
           clearPing();
-          dispatch({ type: "closed", reason: closeEvent.reason });
 
           if (
             !intentionalStopRef.current &&
             lastStartArgsRef.current &&
             reconnectAttemptsRef.current < RECONNECT_MAX_ATTEMPTS
           ) {
+            dispatch({ type: "connecting" });
             const attempts = reconnectAttemptsRef.current;
             const delay = Math.min(
               RECONNECT_BASE_MS * Math.pow(2, attempts),
@@ -167,18 +185,32 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             );
             reconnectAttemptsRef.current = attempts + 1;
             reconnectTimerRef.current = setTimeout(() => {
-              if (!intentionalStopRef.current && reconnectRef.current) {
+              if (
+                !intentionalStopRef.current &&
+                connectionId === connectionIdRef.current &&
+                reconnectRef.current
+              ) {
                 reconnectRef.current();
               }
             }, delay);
+            return;
           }
+
+          dispatch({ type: "closed", reason: closeEvent.reason });
         },
         onStatus: () => {
           /* phase mirroring is handled per-event above */
         },
       });
     },
-    [clearPing, stop],
+    [clearPing, clearReconnect],
+  );
+
+  const start = useCallback(
+    (sessionId: string, fromSeq: number, handlers: RealtimeStartHandlers) => {
+      connect(sessionId, fromSeq, handlers, { resetAttempts: true });
+    },
+    [connect],
   );
 
   const ack = useCallback((lastSeq?: number) => {
@@ -192,6 +224,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     return () => {
       intentionalStopRef.current = true;
+      connectionIdRef.current += 1;
+      reconnectAttemptsRef.current = 0;
       clearReconnect();
       clearPing();
       wsClientRef.current?.close(1000, "unmount");

@@ -441,7 +441,7 @@ class SessionRunner:
                 "audit_graph": (
                     runtime.last_audit_graph.to_dict()
                     if runtime.last_audit_graph is not None
-                    else None
+                    else {"nodes": [], "edges": []}
                 ),
                 "causal_chains": [],
             }

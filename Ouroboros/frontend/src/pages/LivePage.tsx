@@ -173,7 +173,7 @@ export function LivePage() {
 
   useEffect(() => {
     if (snapshot.phase.kind !== "ready") return;
-    if (realtime.phase.kind !== "idle" && realtime.phase.kind !== "closed") return;
+    if (realtime.phase.kind !== "idle") return;
     startRealtime();
   }, [snapshot.phase, realtime.phase, startRealtime]);
 

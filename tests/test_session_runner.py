@@ -37,6 +37,7 @@ class SessionRunnerTests(unittest.TestCase):
         )
         self.assertEqual(snapshot_before["last_seq"], 0)
         self.assertIsNone(snapshot_before["market"])
+        self.assertEqual(snapshot_before["audit_graph"], {"nodes": [], "edges": []})
 
         step = runner.step_session(
             SESSION_ID,

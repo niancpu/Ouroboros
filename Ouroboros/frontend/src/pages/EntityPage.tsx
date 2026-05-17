@@ -10,6 +10,7 @@ import {
 import { useEvents, useSession, useSnapshot, useUI } from "../state";
 import {
   deriveAccountSnapshots,
+  deriveAuditGraph,
   deriveCausalChains,
 } from "../utils/derive";
 import { formatAccountValue, formatTick } from "../utils/format";
@@ -42,6 +43,10 @@ export function EntityPage() {
   const agents = snapshotData?.agents ?? [];
 
   const accountMap = useMemo(() => deriveAccountSnapshots(events.events), [events.events]);
+  const auditGraph = useMemo(
+    () => deriveAuditGraph(snapshotData, events.events),
+    [snapshotData, events.events],
+  );
   const chains = useMemo(
     () => deriveCausalChains(snapshotData, events.events),
     [snapshotData, events.events],
@@ -162,7 +167,7 @@ export function EntityPage() {
             <h2>信念轨迹</h2>
             <BeliefTrack
               agentId={selectedAgent.agent_id}
-              graphBelief={snapshotData?.audit_graph.nodes.find((n) => n.agent_id === selectedAgent.agent_id)?.belief_score}
+              graphBelief={auditGraph.nodes.find((n) => n.agent_id === selectedAgent.agent_id)?.belief_score}
             />
           </div>
           <div className="panel audit-room">
