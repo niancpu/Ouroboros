@@ -22,3 +22,4 @@ CLAUDE.md
 start claude.sh
 start cx.bat
 pytest**
+audit_graph*.*

@@ -97,7 +97,7 @@ class SessionRunnerTests(unittest.TestCase):
         audit_nodes = audit_events[-1]["payload"]["nodes"]
         audit_edges = audit_events[-1]["payload"]["edges"]
         audit_node_ids = {node["agent_id"] for node in audit_nodes}
-        self.assertEqual({node["agent_id"] for node in audit_nodes}, {"buyer", "seller"})
+        self.assertEqual(audit_node_ids, {"buyer", "seller"})
         self.assertTrue(audit_edges)
         self.assertTrue(
             all(
@@ -105,8 +105,8 @@ class SessionRunnerTests(unittest.TestCase):
                 for edge in audit_edges
             )
         )
-        self.assertTrue(any(edge["reason_ref"].startswith("mkt_") for edge in audit_edges))
         self.assertTrue(any(edge["reason_ref"].startswith("trade_") for edge in audit_edges))
+        self.assertFalse(any(edge["reason_ref"].startswith("mkt_") for edge in audit_edges))
         self.assertTrue(
             any(edge["source"] == "buyer" and edge["target"] == "seller" for edge in audit_edges)
         )
@@ -115,6 +115,13 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertTrue(chain_events)
         chain_payload = chain_events[-1]["payload"]
         self.assertEqual(chain_payload["last_event_ref"], chain_payload["steps"][-1]["event_ref"])
+        self.assertTrue(
+            any(
+                step["step_type"] == "price_move"
+                and step["event_ref"].startswith("mkt_")
+                for step in chain_payload["steps"]
+            )
+        )
         self.assertEqual(chain_payload["metrics"]["trade_count"], 1)
         self.assertIn(chain_payload["chain_id"], step["tick_result"]["published_event_ids"])
 
@@ -232,7 +239,43 @@ class SessionRunnerTests(unittest.TestCase):
         graph = audit_events[-1]["payload"]
         node_ids = {node["agent_id"] for node in graph["nodes"]}
         self.assertEqual(node_ids, {"buyer", "seller"})
-        self.assertTrue(graph["edges"])
+        self.assertEqual(graph["edges"], [])
+        self.assertTrue(graph["nodes"])
+        self.assertTrue(
+            all(node["agent_id"] in node_ids for node in graph["nodes"])
+        )
+        self.assertTrue(
+            any(
+                event["type"] == "audit.causal_chain"
+                and any(
+                    step["step_type"] == "price_move"
+                    and step["event_ref"].startswith("mkt_")
+                    for step in event["payload"]["steps"]
+                )
+                for event in events
+            )
+        )
+
+    def test_market_evidence_does_not_create_synthetic_agent_influence_edges(self) -> None:
+        runner = session_runner()
+        runner.create_session(create_command())
+
+        runner.step_session(
+            SESSION_ID,
+            ticks=1,
+            command_id="cmd_step_no_synthetic_market_edges",
+            trace_id=TRACE,
+        )
+
+        events = runner.get_frontend_events(
+            SESSION_ID,
+            from_seq=0,
+            limit=500,
+            request_id="req_no_synthetic_market_edges",
+            trace_id=TRACE,
+        )["events"]
+        graph = [event for event in events if event["type"] == "audit.graph"][-1]["payload"]
+        node_ids = {node["agent_id"] for node in graph["nodes"]}
         self.assertTrue(
             all(
                 edge["source"] in node_ids
@@ -241,7 +284,7 @@ class SessionRunnerTests(unittest.TestCase):
                 for edge in graph["edges"]
             )
         )
-        self.assertTrue(any(edge["reason_ref"].startswith("mkt_") for edge in graph["edges"]))
+        self.assertFalse(any(edge["reason_ref"].startswith("mkt_") for edge in graph["edges"]))
 
     def test_audit_graph_generation_log_write_failure_does_not_fail_tick(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

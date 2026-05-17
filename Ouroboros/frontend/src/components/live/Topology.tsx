@@ -25,6 +25,7 @@ import { agentTypeLabels, labelFrom, riskStateLabels } from "../../i18n/labels";
 import { displayAgentName, formatPercent, formatTick } from "../../utils/format";
 import {
   agentOnlyGraphEdges,
+  aggregatePositionShare,
   buildSpotlightIds,
   deterministicNodePoint,
   positionExposure,
@@ -215,7 +216,7 @@ export function Topology({
           labelFrom(agentTypeLabels, node.agent_type),
           labelFrom(riskStateLabels, node.risk_state),
           `信念 ${node.belief_score.toFixed(2)}`,
-          `持仓 ${formatPercent(positionExposure(node, graphNodes))}`,
+          `总持仓占比 ${formatPercent(aggregatePositionShare(node, graphNodes))}`,
         ].join(" / "),
         symbol: visual.symbol,
         symbolSize: visual.size,

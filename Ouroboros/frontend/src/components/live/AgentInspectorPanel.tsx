@@ -6,7 +6,7 @@ import type {
 } from "../../types/api";
 import { agentTypeLabels, labelFrom, riskStateLabels } from "../../i18n/labels";
 import { displayAgentName, formatPercent } from "../../utils/format";
-import { positionExposure } from "../../utils/graph";
+import { aggregatePositionShare, portfolioPositionRatio } from "../../utils/graph";
 import { EmptyState } from "../common/EmptyState";
 
 interface AgentInspectorPanelProps {
@@ -39,8 +39,10 @@ export function AgentInspectorPanel({
           <strong>{labelFrom(riskStateLabels, selectedAgent.risk_state)}</strong>
           <span>信念</span>
           <strong>{selectedNode.belief_score.toFixed(2)}</strong>
-          <span>持仓</span>
-          <strong>{formatPercent(positionExposure(selectedNode, allNodes))}</strong>
+          <span>组合仓位</span>
+          <strong>{formatPercent(portfolioPositionRatio(selectedAgent))}</strong>
+          <span>总持仓占比</span>
+          <strong>{formatPercent(aggregatePositionShare(selectedNode, allNodes))}</strong>
         </div>
       ) : (
         <EmptyState label="未选择节点" />

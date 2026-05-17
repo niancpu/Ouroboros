@@ -1395,17 +1395,15 @@ class SessionRunner:
         events: list[dict[str, Any]] = []
         market_event_id = artifacts.market_event.event_id if artifacts.market_event else None
         if market_event_id is not None:
-            market_source = _market_graph_source_agent_id(runtime, artifacts)
             for agent_id in artifacts.active_agent_ids:
-                links_to_market_source = market_source is not None and market_source != agent_id
                 events.append(
                     self._frontend_audit_event(
                         runtime,
                         command,
                         agent_id=agent_id,
                         event_id=f"audit_market_{stable_id(agent_id)}_{stable_id(command.tick_id)}",
-                        evidence_refs=[market_event_id] if links_to_market_source else [],
-                        source_agent_id=market_source or agent_id,
+                        evidence_refs=[],
+                        source_agent_id=agent_id,
                         belief_shift=0.18,
                         public_reason="公开行情快照进入该智能体本 Tick 可见输入。",
                     )
@@ -1508,9 +1506,6 @@ class SessionRunner:
                 if forum_source and forum_source != event.get("agent_id"):
                     event["source_agent_id"] = forum_source
                     event["public_reason"] = "公开股吧消息影响该 Agent 的信念或交易倾向。"
-                elif market_source and market_source != event.get("agent_id") and _refs_market_medium(refs, market_refs):
-                    event["source_agent_id"] = market_source
-                    event["public_reason"] = "价格与订单簿变化影响该 Agent 的信念或风险暴露。"
             enriched_events.append(event)
         return enriched_events
 
@@ -1902,13 +1897,6 @@ def _causal_step(
     }
 
 
-def _refs_market_medium(refs: Iterable[str], market_refs: set[str]) -> bool:
-    for ref in refs:
-        if ref in market_refs or ref.startswith(("mkt_", "tape_")):
-            return True
-    return False
-
-
 def _dominant_market_source(artifacts: _TickArtifacts) -> str | None:
     quantities: dict[str, int] = {}
     for order in artifacts.order_inputs:
@@ -1918,40 +1906,6 @@ def _dominant_market_source(artifacts: _TickArtifacts) -> str | None:
     if not quantities:
         return None
     return max(sorted(quantities), key=lambda agent_id: quantities[agent_id])
-
-
-def _market_graph_source_agent_id(
-    runtime: _SessionRuntime,
-    artifacts: _TickArtifacts,
-) -> str | None:
-    dominant_source = _dominant_market_source(artifacts)
-    if dominant_source is not None:
-        return dominant_source
-
-    type_priority = {
-        "hot_money": 0,
-        "quant_algo": 1,
-        "mutual_fund": 2,
-        "national_team": 3,
-        "retail": 4,
-    }
-    candidates = [
-        agent_id
-        for agent_id in artifacts.active_agent_ids
-        if agent_id in runtime.agent_specs
-    ]
-    if len(candidates) < 2:
-        return None
-    return min(
-        candidates,
-        key=lambda agent_id: (
-            type_priority.get(
-                runtime.agent_specs[agent_id].permission_profile.agent_type.value,
-                99,
-            ),
-            agent_id,
-        ),
-    )
 
 
 def _server_time() -> str:

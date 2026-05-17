@@ -141,6 +141,31 @@ class AgentRuntimeMockTests(unittest.TestCase):
         AgentPayload.from_dict(buy.to_dict())
         AgentPayload.from_dict(sell.to_dict())
 
+    def test_exhausted_scripted_agent_falls_back_to_safe_hold(self) -> None:
+        runtime = AgentRuntime(
+            scripted_actions={
+                "agent_a": [
+                    {
+                        "action_type": "buy",
+                        "symbol": "demo_stock",
+                        "order_type": "limit",
+                        "price": 15.2,
+                        "quantity": 100,
+                        "time_in_force": "day",
+                    }
+                ]
+            }
+        )
+
+        first = runtime.act(tick_context("agent_a"))
+        second = runtime.act(
+            tick_context("agent_a", tick_id="2024-01-02T14:07:00+08:00")
+        )
+
+        self.assertEqual(first.action.action_type, OrderActionType.BUY)
+        self.assertEqual(second.action.action_type, OrderActionType.HOLD)
+        self.assertEqual(second.tick_id, "2024-01-02T14:07:00+08:00")
+
     def test_payload_template_default_fills_runtime_identity(self) -> None:
         runtime = AgentRuntime(
             default_actions={

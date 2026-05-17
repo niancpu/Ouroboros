@@ -34,6 +34,27 @@ export function positionExposure(
   return Math.max(0, Math.min(1, (node.position_value ?? 0) / maxPosition));
 }
 
+export function portfolioPositionRatio(
+  agent: Pick<AgentSummary, "equity"> & Partial<Pick<AgentSummary, "position_value">> & { market_value?: number },
+): number {
+  const equity = Number.isFinite(agent.equity) ? agent.equity : 0;
+  if (equity <= 0) return 0;
+  const positionValue = agent.position_value ?? agent.market_value ?? 0;
+  return Math.max(0, Math.min(1, positionValue / equity));
+}
+
+export function aggregatePositionShare(
+  node: Pick<AuditGraphNode, "position_value">,
+  allNodes: ReadonlyArray<Pick<AuditGraphNode, "position_value">>,
+): number {
+  const total = allNodes.reduce(
+    (sum, entry) => sum + Math.max(0, entry.position_value ?? 0),
+    0,
+  );
+  if (total <= 0) return 0;
+  return Math.max(0, Math.min(1, Math.max(0, node.position_value ?? 0) / total));
+}
+
 export function pruneGraphEdges(
   edges: ReadonlyArray<AuditGraphEdge>,
   selectedAgentId: string | null,

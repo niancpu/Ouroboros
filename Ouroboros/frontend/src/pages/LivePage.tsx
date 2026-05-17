@@ -12,7 +12,6 @@ import { EmptyState } from "../components/common/EmptyState";
 import { LoadingSkeleton } from "../components/common/LoadingSkeleton";
 import { AgentInspectorPanel } from "../components/live/AgentInspectorPanel";
 import { BookSide } from "../components/live/BookSide";
-import { MarketCurves } from "../components/live/MarketCurves";
 import { TickScrubber } from "../components/live/TickScrubber";
 import { Topology } from "../components/live/Topology";
 import { FEED_EVENT_TYPES, LIVE_FALLBACK_TICKS } from "../config/constants";
@@ -25,7 +24,6 @@ import {
 import {
   deriveAgentLifecycleMap,
   deriveAuditGraph,
-  deriveOHLCV,
   deriveTickList,
   pickEventsByType,
   pickLatestMarketPrice,
@@ -176,20 +174,6 @@ export function LivePage() {
   const marketEvents = useMemo(
     () => events.events.filter((e) => e.type === "market.price"),
     [events.events],
-  );
-  const ohlcv = useMemo(
-    () =>
-      deriveOHLCV(
-        marketEvents,
-        snapshotData?.market
-          ? {
-              tick_id: snapshotData.current_tick_id,
-              seq: snapshotData.last_seq,
-              market: snapshotData.market,
-            }
-          : null,
-      ),
-    [marketEvents, snapshotData],
   );
   const latestMarket = useMemo(() => {
     const event = pickLatestMarketPrice(marketEvents);
@@ -407,7 +391,6 @@ export function LivePage() {
               ticks={tickList}
               onChange={(index) => setScrubIndex(index)}
             />
-            <MarketCurves bars={ohlcv} lastPrice={latestMarket.last_price} />
           </section>
 
           <aside className="order-book">

@@ -54,6 +54,7 @@ class AgentRuntime:
         self._scripted_actions = {
             agent_id: deque(actions) for agent_id, actions in (scripted_actions or {}).items()
         }
+        self._scripted_agent_ids = set(self._scripted_actions)
         self._llm_gateway = llm_gateway or LLMGateway()
         self._agent_profiles = {
             agent_id: _coerce_agent_profile(profile)
@@ -177,6 +178,8 @@ class AgentRuntime:
         scripted = self._scripted_actions.get(agent_id)
         if scripted:
             return scripted.popleft()
+        if agent_id in self._scripted_agent_ids and agent_id not in self._default_actions:
+            return AgentAction(action_type=OrderActionType.HOLD)
         return self._default_actions.get(agent_id)
 
     def _payload_from_spec(self, context: TickContext, spec: ActionSpec) -> AgentPayload:

@@ -721,7 +721,7 @@ h3 {
 
 .canvas-stack {
   display: grid;
-  grid-template-rows: 53% 76px minmax(220px, 1fr);
+  grid-template-rows: minmax(0, 1fr) 76px;
   min-width: 0;
   overflow: hidden;
 }
